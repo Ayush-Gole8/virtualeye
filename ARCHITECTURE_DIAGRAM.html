@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Virtual Eye 3.0 - System Architecture</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px;
+            color: #333;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+        
+        h1 {
+            text-align: center;
+            color: #667eea;
+            margin-bottom: 10px;
+            font-size: 2.5em;
+        }
+        
+        .subtitle {
+            text-align: center;
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 1.1em;
+        }
+        
+        .layer {
+            border: 3px solid #667eea;
+            border-radius: 10px;
+            margin: 20px 0;
+            padding: 20px;
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+        }
+        
+        .layer-title {
+            font-size: 1.5em;
+            font-weight: bold;
+            color: #667eea;
+            margin-bottom: 15px;
+            text-align: center;
+            padding: 10px;
+            background: white;
+            border-radius: 8px;
+        }
+        
+        .components {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+        
+        .component {
+            background: white;
+            border: 2px solid #764ba2;
+            border-radius: 8px;
+            padding: 15px;
+            transition: transform 0.3s, box-shadow 0.3s;
+        }
+        
+        .component:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 25px rgba(118, 75, 162, 0.3);
+        }
+        
+        .component-title {
+            font-weight: bold;
+            color: #764ba2;
+            margin-bottom: 10px;
+            font-size: 1.1em;
+        }
+        
+        .function-list {
+            list-style: none;
+            padding-left: 0;
+        }
+        
+        .function-list li {
+            padding: 5px 0;
+            padding-left: 20px;
+            position: relative;
+        }
+        
+        .function-list li:before {
+            content: "▸";
+            position: absolute;
+            left: 0;
+            color: #667eea;
+            font-weight: bold;
+        }
+        
+        .arrow {
+            text-align: center;
+            font-size: 2em;
+            color: #667eea;
+            margin: 10px 0;
+            font-weight: bold;
+        }
+        
+        .data-flow {
+            background: #e8f4f8;
+            border: 2px dashed #667eea;
+            border-radius: 8px;
+            padding: 15px;
+            margin: 20px 0;
+        }
+        
+        .data-flow-title {
+            font-weight: bold;
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+        
+        .flow-step {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin: 10px 0;
+            padding: 10px;
+            background: white;
+            border-radius: 5px;
+        }
+        
+        .flow-arrow {
+            color: #764ba2;
+            font-size: 1.5em;
+        }
+        
+        .highlight {
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+        }
+        
+        .footer {
+            text-align: center;
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 2px solid #667eea;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎯 Virtual Eye 3.0</h1>
+        <p class="subtitle">AI-Powered Vision Assistance System - System Architecture</p>
+        
+        <!-- User Interface Layer -->
+        <div class="layer">
+            <div class="layer-title">👤 USER INTERFACE LAYER</div>
+            <div class="components">
+                <div class="component">
+                    <div class="component-title">Vision Page (Live Camera)</div>
+                    <ul class="function-list">
+                        <li>Real-time camera feed</li>
+                        <li>Object detection visualization</li>
+                        <li>Distance display</li>
+                        <li>Calibration interface</li>
+                        <li>Q&A panel</li>
+                        <li>Wall alerts</li>
+                    </ul>
+                </div>
+                <div class="component">
+                    <div class="component-title">OCR Page (Text Reader)</div>
+                    <ul class="function-list">
+                        <li>Multi-language OCR</li>
+                        <li>Text extraction</li>
+                        <li>Text-to-speech output</li>
+                        <li>Camera-based reading</li>
+                    </ul>
+                </div>
+                <div class="component">
+                    <div class="component-title">Voice Navigation Context</div>
+                    <ul class="function-list">
+                        <li>Speech recognition</li>
+                        <li>Text-to-speech</li>
+                        <li>Voice commands</li>
+                        <li>Navigation routing</li>
+                    </ul>
+                </div>
+            </div>
+            <div class="highlight">
+                <strong>Entities:</strong> Visually Impaired Users, Caregivers, Developers
+            </div>
+        </div>
+        
+        <div class="arrow">⬇️ HTTP/REST API ⬇️</div>
+        
+        <!-- Backend Layer -->
+        <div class="layer">
+            <div class="layer-title">⚙️ BACKEND SERVER LAYER (Flask)</div>
+            <div class="components">
+                <div class="component">
+                    <div class="component-title">API Endpoints</div>
+                    <ul class="function-list">
+                        <li>/health - Server status</li>
+                        <li>/analyze_frame - Object detection</li>
+                        <li>/question - AI Q&A</li>
+                        <li>/calibrate - Distance calibration</li>
+                        <li>/ocr - Text extraction</li>
+                        <li>/get_calib_K - Get calibration</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+        
+        <div class="arrow">⬇️ Model Calls ⬇️</div>
+        
+        <!-- AI/ML Models Layer -->
+        <div class="layer">
+            <div class="layer-title">🤖 AI/ML MODELS & PROCESSING LAYER</div>
+            <div class="components">
+                <div class="component">
+                    <div class="component-title">YOLOv8 (Object Detection)</div>
+                    <ul class="function-list">
+                        <li>Real-time detection</li>
+                        <li>80+ object classes</li>
+                        <li>Confidence filtering</li>
+                        <li>Bounding box extraction</li>
+                    </ul>
+                </div>
+                <div class="component">
+                    <div class="component-title">ByteTrack (Tracking)</div>
+                    <ul class="function-list">
+                        <li>Persistent tracking</li>
+                        <li>Track ID assignment</li>
+                        <li>Frame continuity</li>
+                        <li>Duplicate prevention</li>
+                    </ul>
+                </div>
+                <div class="component">
+                    <div class="component-title">BLIP-2 (Vision-Language)</div>
+                    <ul class="function-list">
+                        <li>Scene captioning</li>
+                        <li>Question answering</li>
+                        <li>Note/document description</li>
+                        <li>Contextual understanding</li>
+                    </ul>
+                </div>
+                <div class="component">
+                    <div class="component-title">EasyOCR (Text Recognition)</div>
+                    <ul class="function-list">
+                        <li>Multi-language OCR</li>
+                        <li>Text extraction</li>
+                        <li>Image preprocessing</li>
+                        <li>Language detection</li>
+                    </ul>
+                </div>
+                <div class="component">
+                    <div class="component-title">Navigation & Safety</div>
+                    <ul class="function-list">
+                        <li>Wall detection (Edge/Hough)</li>
+                        <li>Distance estimation</li>
+                        <li>Spatial awareness</li>
+                        <li>Alert system (3s cooldown)</li>
+                        <li>BLIP caption analysis</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+        
+        <div class="arrow">⬇️ Data Flow ⬇️</div>
+        
+        <!-- Data Storage -->
+        <div class="layer">
+            <div class="layer-title">💾 DATA STORAGE & CONFIGURATION</div>
+            <div class="components">
+                <div class="component">
+                    <div class="component-title">Calibration Data</div>
+                    <ul class="function-list">
+                        <li>calib_K.json</li>
+                        <li>Distance factors</li>
+                        <li>Persistent storage</li>
+                    </ul>
+                </div>
+                <div class="component">
+                    <div class="component-title">Model Weights</div>
+                    <ul class="function-list">
+                        <li>yolov8n.pt</li>
+                        <li>BLIP-2 models</li>
+                        <li>EasyOCR models</li>
+                    </ul>
+                </div>
+                <div class="component">
+                    <div class="component-title">Configuration</div>
+                    <ul class="function-list">
+                        <li>server.py settings</li>
+                        <li>API endpoints</li>
+                        <li>Environment variables</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Data Flow -->
+        <div class="data-flow">
+            <div class="data-flow-title">📊 Data Flow</div>
+            <div class="flow-step">
+                <span>User (Camera)</span>
+                <span class="flow-arrow">→</span>
+                <span>Frontend (React)</span>
+            </div>
+            <div class="flow-step">
+                <span>Frontend</span>
+                <span class="flow-arrow">→</span>
+                <span>Backend (Flask) - HTTP POST</span>
+            </div>
+            <div class="flow-step">
+                <span>Backend</span>
+                <span class="flow-arrow">→</span>
+                <span>YOLOv8 + ByteTrack</span>
+            </div>
+            <div class="flow-step">
+                <span>YOLOv8</span>
+                <span class="flow-arrow">→</span>
+                <span>BLIP-2 Captioning</span>
+            </div>
+            <!-- <div class="flow-step">
+                <span>BLIP-2</span>
+                <span class="flow-arrow">→</span>
+                <span>Wall Detection</span>
+            </div> -->
+            <div class="flow-step">
+                <span>Processing</span>
+                <span class="flow-arrow">→</span>
+                <span>Response (JSON)</span>
+            </div>
+            <div class="flow-step">
+                <span>Frontend</span>
+                <span class="flow-arrow">→</span>
+                <span>User (Audio Feedback)</span>
+            </div>
+        </div>
+        
+        <div class="footer">
+            <p><strong>Virtual Eye 3.0</strong> - Making the world accessible through AI 🌍👀🤖</p>
+            <p style="margin-top: 10px; font-size: 0.9em;">Architecture designed for visually impaired navigation assistance</p>
+        </div>
+    </div>
+</body>
+</html>
+

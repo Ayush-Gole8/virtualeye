@@ -1,0 +1,45 @@
+# ===== Python / backend =====
+backend/venv/
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# ===== Integration backups =====
+*.bak
+*.bak_*
+*.backup
+*.backup_*
+
+# ===== Week 2 runtime artifacts =====
+backend/study_logs/
+*.jsonl
+backend/depth_calibration.json
+node_modules/
+.env
+# ===== Node / frontend =====
+node_modules/
+dist/
+dist-ssr/
+.vite/
+.vite/deps/
+*.local
+
+# ===== Model weights / large binaries (uncomment if you fetch these separately) =====
+# backend/yolov8n.pt
+# backend.zip
+
+# ===== Env / secrets =====
+.env
+.env.*
+!.env.example
+
+# ===== Editor / OS =====
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
