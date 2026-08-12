@@ -19,7 +19,7 @@ import json
 import sys
 from collections import defaultdict
 from pathlib import Path
-
+import glob
 
 def load_session(path):
     """Load a JSONL telemetry file into a list of frame records."""
@@ -74,7 +74,8 @@ def main():
         print("Reads telemetry logs and outputs summary table.")
         sys.exit(1)
 
-    paths = [Path(p) for p in sys.argv[1:]]
+    paths = sorted(Path(p) for argv in sys.argv[1:]
+               for p in glob.glob(argv))
     by_mode = defaultdict(list)
 
     for path in paths:

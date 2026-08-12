@@ -20,6 +20,7 @@ backend/study_logs/
 backend/depth_calibration.json
 node_modules/
 .env
+backend/eval_videos
 # ===== Node / frontend =====
 node_modules/
 dist/
