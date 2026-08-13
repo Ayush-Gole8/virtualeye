@@ -2,6 +2,7 @@ import React from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { VoiceProvider } from './context/VoiceNavigationContext';
+import { ModeProvider } from './context/ModeContext';
 
 // Pages
 import LandingPage from './pages/LandingPage';
@@ -42,9 +43,11 @@ function AppContent() {
 function App() {
   return (
     <Router>
-      <VoiceProvider>
-        <AppContent />
-      </VoiceProvider>
+      <ModeProvider>
+        <VoiceProvider>
+          <AppContent />
+        </VoiceProvider>
+      </ModeProvider>
     </Router>
   );
 }

@@ -67,6 +67,10 @@ PRIORITY_TOP_K = 2
 PRIORITY_MIN_SCORE = 4.0
 USE_TTC = True
 
+# User agility setting: "high" (default) or "low".
+# "low" shifts TTC urgency thresholds earlier so warnings come sooner.
+SAFETY_AGILITY_DEFAULT = "high"
+
 
 # ============== FLASK APP ==============
 app = Flask(__name__)
@@ -190,7 +194,9 @@ def simple_detection_facts(frame):
             name = model.names[int(box.cls[0])]
             tid = int(box.id[0]) if box.id is not None else -1
             cx = (x1 + x2) // 2
-
+            if name in eng_priority.VEHICLE_CLASSES:
+                if not eng_path.plausible_vehicle_geometry(depth_map, [x1, y1, x2, y2]):
+                    continue
             dist = eng_depth.object_distance_from_depth(depth_map, [x1, y1, x2, y2])
             col = eng_color.dominant_color(frame, [x1, y1, x2, y2], cls=name)
 
@@ -211,6 +217,46 @@ def simple_detection_facts(frame):
     detections = eng_motion.update_motion(detections, w)
     return detections, depth_map
 
+
+def scan_terrain_hazards(depth_map):
+    """
+    Run overhead + drop-off + staircase detectors on an already-computed
+    depth map.
+
+    Returns:
+        {
+          "overhead":   <analyze_overhead result or None>,
+          "dropoff":    <detect_dropoff result or None>,
+          "staircase":  <detect_staircase result or None>,
+          "speech":     "<hazard sentence(s), highest urgency first>" or ""
+        }
+
+    Only CONFIRMED hazards produce speech (all three detectors self-debounce
+    over consecutive frames), so this will not chatter on a single noisy
+    frame. Drop-off is spoken first (a fall is the higher consequence),
+    then staircase, then overhead.
+    """
+    overhead = eng_path.analyze_overhead(depth_map)
+    dropoff = eng_path.detect_dropoff(depth_map)
+    staircase = eng_path.detect_staircase(depth_map)
+
+    parts = []
+    do_msg = eng_narrate.narrate_dropoff(dropoff)
+    st_msg = eng_narrate.narrate_staircase(staircase)
+    oh_msg = eng_narrate.narrate_overhead(overhead)
+    if do_msg:
+        parts.append(do_msg)
+    if st_msg:
+        parts.append(st_msg)
+    if oh_msg:
+        parts.append(oh_msg)
+
+    return {
+        "overhead": overhead if overhead.get("detected") else None,
+        "dropoff": dropoff if dropoff.get("detected") else None,
+        "staircase": staircase if staircase.get("detected") else None,
+        "speech": " ".join(parts),
+    }
 
 def qa_from_detections(question, detections):
     """Rule-based fallback Q&A over detection facts (no model call)."""
@@ -267,10 +313,23 @@ def analyze_frame():
         if 'frame' not in request.files:
             return jsonify({"error": "No frame provided"}), 400
 
-        t0 = time.time()
+        t0 = time.perf_counter()
         file = request.files['frame']
         mode = request.form.get('mode', 'priority')
         session_id = request.form.get('session_id', '') or None
+
+        # Agility setting controls TTC urgency band thresholds.
+        # "low" agility produces earlier (more conservative) warnings.
+        agility = (
+            request.form.get(
+                "agility",
+                SAFETY_AGILITY_DEFAULT,
+            )
+            .strip()
+            .lower()
+        )
+        if agility not in {"high", "low"}:
+            agility = SAFETY_AGILITY_DEFAULT
 
         file_bytes = np.frombuffer(file.read(), np.uint8)
         frame = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
@@ -282,13 +341,36 @@ def analyze_frame():
 
         detections, depth_map = simple_detection_facts(frame)
 
-        # --- Clear-path navigation (reuses the depth map, no extra model call) ---
+        # ------------------------------------------------------------------
+        # Depth-based navigation and structural safety
+        # Reuses the single depth map produced above — no extra model call.
+        # ------------------------------------------------------------------
+
         path_verdict = eng_path.analyze_path(depth_map, w, h)
         path_changed = eng_path.should_announce_verdict(path_verdict)
-        path_speech = eng_narrate.narrate_path(path_changed) if path_changed else ""
+        path_speech = (
+            eng_narrate.narrate_path(path_changed)
+            if path_changed
+            else ""
+        )
 
-        # --- Object speech: naive (announce all) vs priority (TTC-ranked, gated) ---
+        # 3.1 Head-height / upper-body hazard alert
+        overhead_result = eng_path.analyze_overhead(depth_map)
+        overhead_speech = eng_narrate.narrate_overhead(overhead_result)
+
+        # 3.2 Descending stair / curb / drop-off warning
+        dropoff_result = eng_path.detect_dropoff(depth_map)
+        dropoff_speech = eng_narrate.narrate_dropoff(dropoff_result)
+
+        # ------------------------------------------------------------------
+        # Object speech: naive (announce all) vs priority (TTC-ranked, gated)
+        # 3.3 agility is threaded into the priority engine here.
+        # ------------------------------------------------------------------
+
         if mode == 'naive':
+            # Baseline: announce every detected object without filtering.
+            # This branch intentionally omits TTC/priority to preserve the
+            # naive-vs-priority study baseline.
             object_speech = ". ".join(
                 f"{d['class']} on your {d['side']}, {d['distance_str']} away"
                 for d in detections
@@ -296,16 +378,103 @@ def analyze_frame():
             speak_dets = detections
         else:
             top = eng_priority.prioritize(
-                detections, w, top_k=PRIORITY_TOP_K,
-                min_score=PRIORITY_MIN_SCORE, use_ttc=USE_TTC
+                detections,
+                w,
+                top_k=PRIORITY_TOP_K,
+                min_score=PRIORITY_MIN_SCORE,
+                use_ttc=USE_TTC,
+                agility=agility,      # 3.3: propagates high/low TTC bands
             )
-            changed = [d for d in top
-                       if eng_priority.should_announce_now(d, d['track_id'], _last_announced)]
-            object_speech = eng_narrate.narrate(changed) if changed else ""
+            changed = [
+                d for d in top
+                if eng_priority.should_announce_now(
+                    d, d['track_id'], _last_announced
+                )
+            ]
+            object_speech = (
+                eng_narrate.narrate(changed)
+                if changed
+                else ""
+            )
             speak_dets = top
+        staircase_result = eng_path.detect_staircase(depth_map)
+        if staircase_result.get("detected") and staircase_result.get("roi"):
+            r = staircase_result["roi"]
+            staircase_result["color"] = eng_color.dominant_color(
+                frame, [r["x0"], r["y0"], r["x1"], r["y1"]]
+            )
+        staircase_speech = eng_narrate.narrate_staircase(staircase_result)
+        # ------------------------------------------------------------------
+        # Structured alert list for Tier-2 frontend consumption.
+        # Drop-off is CRITICAL, overhead is HIGH.
+        # Both are always included so the frontend can render all hazards.
+        # ------------------------------------------------------------------
 
-        # Combine — path first (safety), then objects
-        speech = " ".join(s for s in [path_speech, object_speech] if s).strip()
+        alerts = []
+
+        if dropoff_result.get("detected", False):
+            alerts.append({
+                "type": "dropoff",
+                "priority": "critical",
+                "speech": dropoff_speech,
+                "distance_m": dropoff_result.get("distance_m"),
+                "confidence": dropoff_result.get("confidence", 0.0),
+            })
+
+        if overhead_result.get("detected", False):
+            alerts.append({
+                "type": "overhead",
+                "priority": "high",
+                "speech": overhead_speech,
+                "distance_m": overhead_result.get("distance_m"),
+                "confidence": overhead_result.get("confidence", 0.0),
+            })
+
+        if staircase_result.get("detected", False):
+            alerts.append({
+                "type": "staircase",
+                "priority": "high",
+                "speech": staircase_speech,
+                "distance_m": staircase_result.get("distance_m"),
+                "confidence": staircase_result.get("confidence", 0.0),
+            })
+
+        # ------------------------------------------------------------------
+        # Safety speech priority policy:
+        #   drop-off (critical) > overhead (high) > path/objects
+        #
+        # Only the single highest-priority structural event enters the
+        # spoken channel to avoid auditory overload at the worst moments.
+        # The full `alerts` list is still returned in the JSON response.
+        # ------------------------------------------------------------------
+
+        structural_speech = ""
+        if dropoff_speech:
+            structural_speech = dropoff_speech
+        elif staircase_speech:
+            structural_speech = staircase_speech
+        elif overhead_speech:
+            structural_speech = overhead_speech
+
+        if structural_speech:
+            speech = structural_speech
+        else:
+            speech = " ".join(
+                s for s in [path_speech, object_speech] if s
+            ).strip()
+
+        # ------------------------------------------------------------------
+        # Build response_detections: JSON-safe copy with explicit urgency
+        # field so the frontend doesn't need to interpret urgency_band.
+        # ------------------------------------------------------------------
+
+        response_detections = []
+        for d in detections:
+            item = dict(d)
+            # urgency_band is written by compute_priority_score;
+            # expose it as "urgency" for the frontend.
+            item["urgency"] = item.get("urgency_band", "none")
+            response_detections.append(item)
 
         # --- Annotate frame for the debug overlay ---
         for d in speak_dets:
@@ -317,26 +486,54 @@ def analyze_frame():
         cv2.line(frame, (int(w * RIGHT_FRAC), 0), (int(w * RIGHT_FRAC), h), (255, 255, 0), 1)
         annotated_b64 = encode_image_base64(frame)
 
-        # --- Telemetry ---
-        latency_ms = (time.time() - t0) * 1000.0
+        # --- Telemetry (expanded for Tier-1 evaluation) ---
+        latency_ms = (time.perf_counter() - t0) * 1000.0
+
+        det_records = []
+        for d in detections:
+            det_records.append({
+                "class": d.get("class"),
+                "track_id": d.get("track_id"),
+                "dist_m": d.get("distance"),
+                "side": d.get("side"),
+                "motion": d.get("motion"),
+                "velocity_mps": d.get("velocity_mps"),
+                "closing_speed_mps": d.get("closing_speed_mps"),
+                "ttc_s": d.get("ttc"),
+                "urgency": d.get("urgency_band", "none"),
+                "ttc_decreasing": d.get("ttc_decreasing", False),
+                "ttc_high_confirmed": d.get("ttc_high_confirmed", False),
+                "priority": d.get("priority"),
+            })
+
         eng_telemetry.log_frame({
             "ts": time.time(),
             "session": eng_telemetry.current_session(),
             "mode": mode,
+            "agility": agility,
             "latency_ms": round(latency_ms, 1),
             "n_dets": len(detections),
-            "dets": [{"class": d["class"], "dist": d.get("distance"),
-                      "motion": d.get("motion")} for d in detections],
+            "dets": det_records,
+            "alerts": alerts,
+            "overhead": overhead_result,
+            "dropoff": dropoff_result,
+            "staircase": staircase_result,
+            "path": path_verdict,
+            "path_changed": path_changed is not None,
             "speech": speech,
             "words": len(speech.split()) if speech else 0,
-            "path": path_verdict,
         })
 
         return jsonify({
-            "detections": detections,
+            "detections": response_detections,
             "speech": speech,
             "mode": mode,
+            "agility": agility,
             "path": path_verdict,
+            "overhead": overhead_result,
+            "dropoff": dropoff_result,
+            "staircase": staircase_result,
+            "alerts": alerts,
             "has_objects": len(detections) > 0,
             "annotated_image": annotated_b64,
             "K_value": K_DEFAULT,
@@ -574,6 +771,42 @@ def ocr_pdf():
     except Exception as e:
         print(f"[ocr_pdf] {e}")
         return jsonify({"error": str(e)}), 500
+
+
+def reset_all_engine_state():
+    """
+    Clear all temporal engine state.
+
+    Must be called when the camera restarts or a new study session begins,
+    otherwise stale motion history / TTC debounce / path streak data from
+    the previous session can fire spurious hazard warnings on the first
+    frame of a new session.
+
+    Clears:
+      - motion history + TTC confirmation flags  (eng_motion)
+      - priority announce-gate cache             (_last_announced)
+      - path/clear-path last-state               (eng_path — via reset_path_state,
+                                                  which also clears _dropoff_streak)
+    """
+    global _last_announced
+    eng_motion.reset_motion()
+    eng_priority.reset_priority_state()
+    eng_path.reset_path_state()   # clears BOTH path last-state AND drop-off streak
+    _last_announced = {}
+    print("[RESET] All engine temporal state cleared.")
+
+
+@app.route('/reset', methods=['POST'])
+def reset_session():
+    """
+    Camera-restart / study-session boundary hook.
+
+    Call this from the frontend whenever the user starts a new navigation
+    session or the camera feed is restarted, so no stale hazard state
+    bleeds across sessions.
+    """
+    reset_all_engine_state()
+    return jsonify({"status": "reset", "message": "All engine state cleared."})
 
 
 # ============== MAIN ==============

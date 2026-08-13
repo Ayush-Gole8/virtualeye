@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { Camera, Square, Play, Mic, AlertCircle, CheckCircle, Zap, X, RefreshCw } from 'lucide-react';
 import { useVoice } from '../context/VoiceNavigationContext';
+import { useMode } from '../context/ModeContext';
 import toast from 'react-hot-toast';
 import './VisionPage.css';
 
@@ -22,6 +23,7 @@ const getFetchOptions = (options = {}) => {
 
 const VisionPage = () => {
   const { speak } = useVoice();
+  const { mode } = useMode();
   
   const [isStreaming, setIsStreaming] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -136,6 +138,39 @@ const VisionPage = () => {
     window.addEventListener('voice-start-calibration', handleVoiceCalibration);
     window.addEventListener('voice-start-qa', handleVoiceQA);
 
+    // Handle inline scene questions (e.g. "where is my bottle") without navigating to chat
+    const handleVoiceSceneQuestion = async (e) => {
+      const question = e.detail?.question;
+      if (!question) return;
+
+      if (!streamRef.current) {
+        speak("Camera is not active. Please say 'start camera' first.");
+        return;
+      }
+
+      try {
+        muteSpeechFor(7000); // silence periodic descriptions while answering
+        const blob = await captureFrame();
+        if (!blob) { speak("Could not capture a frame to answer your question."); return; }
+
+        const formData = new FormData();
+        formData.append('frame', blob);
+        formData.append('question', question);
+
+        const response = await fetch(`${API_BASE_URL}/question`, getFetchOptions({ method: 'POST', body: formData }));
+        const data = await response.json();
+        if (response.ok && data.answer) {
+          speak(data.answer);
+        } else {
+          speak(data.error || "I couldn't find an answer to that.");
+        }
+      } catch (err) {
+        speak("I had trouble analysing the scene.");
+        console.error('voice-scene-question error:', err);
+      }
+    };
+    window.addEventListener('voice-scene-question', handleVoiceSceneQuestion);
+
     // Cleanup
     return () => {
       if (streamRef.current) {
@@ -149,6 +184,7 @@ const VisionPage = () => {
       window.removeEventListener('voice-capture', handleVoiceCapture);
       window.removeEventListener('voice-start-calibration', handleVoiceCalibration);
       window.removeEventListener('voice-start-qa', handleVoiceQA);
+      window.removeEventListener('voice-scene-question', handleVoiceSceneQuestion);
     };
   }, []);
 
@@ -298,6 +334,7 @@ const VisionPage = () => {
       const formData = new FormData();
       formData.append('frame', blob, 'frame.jpg');
       formData.append('lang', lang);
+      formData.append('mode', mode); // 'priority' | 'naive'
 
       const response = await fetch(`${API_BASE_URL}/analyze_frame`, getFetchOptions({
         method: 'POST',

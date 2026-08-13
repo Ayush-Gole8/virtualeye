@@ -24,6 +24,8 @@ export const VoiceProvider = ({ children }) => {
   const recognitionRef = useRef(null);
   const isListeningRef = useRef(isListening); 
   const processingRef = useRef(false);
+  const isSpeakingRef = useRef(false);          // true while TTS audio is playing
+  const isRecognitionRunningRef = useRef(false); // true only when SpeechRecognition is actively running
   const [voice, setVoice] = useState(null);
 
   // --- VOICE LOADING ---
@@ -57,18 +59,36 @@ export const VoiceProvider = ({ children }) => {
       recognition.interimResults = false;
       recognition.lang = 'en-US';
 
-      recognition.onstart = () => { setIsListening(true); isListeningRef.current = true; };
-      recognition.onend = () => { if (isListeningRef.current) try { recognition.start(); } catch (e) {} else setIsListening(false); };
-      recognition.onerror = () => { isListeningRef.current = false; setIsListening(false); };
+      recognition.onstart = () => {
+        setIsListening(true);
+        isListeningRef.current = true;
+        isRecognitionRunningRef.current = true;
+      };
+      // Only auto-restart if user still wants to listen AND TTS is not currently playing
+      recognition.onend = () => {
+        isRecognitionRunningRef.current = false;
+        if (isListeningRef.current && !isSpeakingRef.current) {
+          try { recognition.start(); } catch (e) {}
+        } else if (!isListeningRef.current) {
+          setIsListening(false);
+        }
+      };
+      recognition.onerror = () => {
+        isRecognitionRunningRef.current = false;
+        isListeningRef.current = false;
+        setIsListening(false);
+      };
       
       recognition.onresult = (event) => {
         const transcript = event.results[event.resultIndex][0].transcript.toLowerCase().trim();
         console.log("Heard:", transcript);
         setLastCommand(transcript);
         
-        if (!processingRef.current) {
+        // Skip if TTS is currently playing OR we're still in command-lock cooldown
+        if (!processingRef.current && !isSpeakingRef.current) {
           processingRef.current = true;
           processCommand(transcript);
+          // Base lock — speak() overrides this with a longer window
           setTimeout(() => { processingRef.current = false; }, 1500);
         }
       };
@@ -98,6 +118,18 @@ export const VoiceProvider = ({ children }) => {
       window.dispatchEvent(new CustomEvent('voice-switch-camera'));
       speak("Switching camera view.");
     };
+
+    // 0. MODE SWITCHING — priority / naive engine toggle
+    if (matches(['priority mode', 'switch to priority', 'enable priority', 'activate priority', 'use priority'])) {
+      window.dispatchEvent(new CustomEvent('voice-set-mode', { detail: { mode: 'priority' } }));
+      speak("Priority mode activated. Smart filtering will now focus on the most urgent objects.");
+      return;
+    }
+    if (matches(['naive mode', 'switch to naive', 'enable naive', 'activate naive', 'use naive', 'announce all', 'all objects'])) {
+      window.dispatchEvent(new CustomEvent('voice-set-mode', { detail: { mode: 'naive' } }));
+      speak("Naive mode activated. All detected objects will be announced.");
+      return;
+    }
 
     // 1. HELP COMMANDS - Comprehensive help system
     if (matches(['help', 'what can i say', 'commands', 'options', 'what can you do', 'list commands', 'show me commands', 'what are my options'])) {
@@ -190,41 +222,26 @@ export const VoiceProvider = ({ children }) => {
         speak("You're already in Smart Reader. Position your document and say 'read text' to start.");
       }
     }
+    // SCENE QUESTIONS — handled inline via Vision backend, no navigation
+    else if (matches(['where is', 'where\'s', 'can you find', 'can you see', 'do you see', 'is there', 'find me', 'locate', 'look for'])) {
+      if (location.pathname.includes('vision')) {
+        // Dispatch to VisionPage to answer using the live camera + /question endpoint
+        window.dispatchEvent(new CustomEvent('voice-scene-question', { detail: { question: cmd } }));
+        speak("Let me check the scene for you.");
+      } else {
+        // Navigate to vision first, then ask once camera boots
+        speak("Opening Vision mode to find that for you. Say 'start camera' first, then ask again.");
+        navigate('/dashboard/vision');
+      }
+    }
     else if (matches(['chat', 'voice chat', 'talk', 'assistant', 'ai', 'ask ai', 'ask question', 'i have a question', 'i need help', 'can you help', 'help me',
                     'talk to assistant', 'start chat', 'open chat', 'chat with ai', 'ask something', 'i want to ask', 'can i ask', 'hey assistant',
                     'virtual assistant', 'virtual eye', 'hey virtual eye', 'okay virtual eye', 'hello assistant', 'hey ai', 'okay ai', 'hello ai',
-                    'i need information', 'tell me about', 'i want to know', 'can you tell me', 'what is', 'who is', 'how to', 'why is', 'when is', 'where is'])) {
-      
-      // Extract the actual question if present
-      const questionPhrases = ['ask', 'question', 'what is', 'who is', 'how to', 'why is', 'when is', 'where is', 'tell me about'];
-      const hasQuestion = questionPhrases.some(phrase => cmd.includes(phrase));
+                    'i need information', 'tell me about', 'i want to know', 'can you tell me'])) {
       
       if (!location.pathname.includes('chat')) {
+        speak("Opening Chat. How can I assist you today?");
         navigate('/dashboard/chat');
-        // Small delay to ensure chat component is mounted
-        setTimeout(() => {
-          if (hasQuestion) {
-            // If the command includes a question, send it to the chat
-            const question = cmd.replace(/(ask|question|ai|assistant|please|can you|could you|would you|kindly|hey|okay|hello|hi|virtual eye|virtual assistant)/gi, '').trim();
-            if (question) {
-              window.dispatchEvent(new CustomEvent('voice-chat-question', { detail: { question } }));
-              speak(`I'll help with your question about ${question}.`);
-            } else {
-              speak("Opening Chat. What would you like to know?");
-            }
-          } else {
-            speak("Opening Chat. How can I assist you today?");
-          }
-        }, 500);
-      } else if (hasQuestion) {
-        // If already in chat and user asks a question
-        const question = cmd.replace(/(ask|question|ai|assistant|please|can you|could you|would you|kindly|hey|okay|hello|hi|virtual eye|virtual assistant)/gi, '').trim();
-        if (question) {
-          window.dispatchEvent(new CustomEvent('voice-chat-question', { detail: { question } }));
-          speak(`Let me help with that.`);
-        } else {
-          speak("I'm listening. What's your question?");
-        }
       } else {
         speak("I'm here to help. What would you like to know?");
       }
@@ -302,13 +319,47 @@ export const VoiceProvider = ({ children }) => {
   const speak = (text) => {
     window.speechSynthesis.cancel();
     const voices = window.speechSynthesis.getVoices();
-    // Retry if voices not loaded
+    // Retry if voices not loaded yet
     if (voices.length === 0) { setTimeout(() => speak(text), 100); return; }
 
-    let selectedVoice = voice || voices.find(v => v.name.includes('Google US English')) || voices.find(v => v.lang.startsWith('en'));
-    
+    // Block commands immediately and mark TTS as active
+    isSpeakingRef.current = true;
+    processingRef.current = true;
+
+    // Only stop recognition if it's actually running — avoids spurious onend/restart cycles
+    if (isRecognitionRunningRef.current) {
+      try { recognitionRef.current.stop(); } catch (e) {}
+    }
+
+    const selectedVoice = voice ||
+      voices.find(v => v.name.includes('Google US English')) ||
+      voices.find(v => v.lang.startsWith('en'));
+
     const utterance = new SpeechSynthesisUtterance(text);
     if (selectedVoice) utterance.voice = selectedVoice;
+
+    // Estimate TTS duration (~65ms per character, min 800ms) for safety fallback
+    const estimatedMs = Math.max(800, text.length * 65);
+
+    const onTTSDone = () => {
+      if (!isSpeakingRef.current) return; // guard against double-fire
+      isSpeakingRef.current = false;
+      // Hold command lock for 1.5s after speech ends — absorbs any echo the mic might pick up
+      setTimeout(() => { processingRef.current = false; }, 1500);
+      // Resume mic only if user wants to listen and it's not already running
+      if (isListeningRef.current && !isRecognitionRunningRef.current) {
+        setTimeout(() => {
+          try { recognitionRef.current.start(); } catch (e) {}
+        }, 600); // 600ms gap lets echo fully fade
+      }
+    };
+
+    utterance.onend = onTTSDone;
+    utterance.onerror = onTTSDone;
+
+    // Safety fallback: browsers sometimes don't fire onend — release after estimated duration + 2s buffer
+    setTimeout(() => { if (isSpeakingRef.current) onTTSDone(); }, estimatedMs + 2000);
+
     window.speechSynthesis.speak(utterance);
   };
 

@@ -20,36 +20,54 @@ def _count_word(n):
     return _NUM_WORDS.get(n, str(n))
 
 
+# Spoken escalation for TTC urgency bands (feature 3.3).
+# A critical/high closing threat must SOUND different from a calm mention.
+_BAND_PREFIX = {"critical": "Stop.", "high": "Warning."}
+
+
+def _apply_urgency(core, band):
+    """Capitalize the clause and prepend an urgency word for high/critical bands."""
+    if not core:
+        return ""
+    core = core[0].upper() + core[1:]
+    prefix = _BAND_PREFIX.get(band)
+    return f"{prefix} {core}." if prefix else f"{core}."
+
+
 def _single_phrase(det):
-    """Build a phrase for one detection."""
-    parts = []
+    """Build a phrase for one detection: 'red car approaching, 3 metres to your center'."""
     cls = det.get("class", "object")
 
     # Prepend color if available
     color = det.get("color")
     noun = f"{color} {cls}" if color else cls
-    parts.append(noun)
 
     # Motion
-    motion = det.get("motion", "still")
-    if motion == "approaching":
-        parts.append("approaching")
-    elif motion == "crossing":
-        parts.append("crossing")
-    elif motion == "moving away":
-        parts.append("moving away")
+    motion_word = {
+        "approaching": "approaching",
+        "crossing": "crossing",
+        "moving away": "moving away",
+    }.get(det.get("motion", "still"))
+    head = f"{noun} {motion_word}" if motion_word else noun
 
-    # Distance + side
+    # Distance + side (mirror the hazard narrators' <1 m wording)
     dist = det.get("distance")
     side = det.get("side", "front")
     side_word = "center" if side == "center" else side
     if dist is not None:
-        unit = "metre" if dist < 1.5 else "metres"
-        parts.append(f"{dist:.0f} {unit} to your {side_word}")
+        try:
+            dist = float(dist)
+            if dist < 1.0:
+                tail = f"less than one metre to your {side_word}"
+            else:
+                unit = "metre" if dist < 1.5 else "metres"
+                tail = f"{dist:.0f} {unit} to your {side_word}"
+        except (TypeError, ValueError):
+            tail = f"to your {side_word}"
     else:
-        parts.append(f"to your {side_word}")
+        tail = f"to your {side_word}"
 
-    return " ".join(parts)
+    return f"{head}, {tail}"
 
 
 def _group_phrase(dets):
@@ -80,6 +98,10 @@ def narrate(priority_dets):
     """
     Build the final spoken sentence from prioritized detections.
 
+    High/critical TTC bands (feature 3.3) are escalated with "Warning."/"Stop.".
+    Same-class objects are grouped ONLY when all are still — grouping a moving
+    threat would drop its motion and distance, which the user needs.
+
     Args:
         priority_dets: list of top-priority detection dicts
 
@@ -94,14 +116,21 @@ def narrate(priority_dets):
     for d in priority_dets:
         by_class[d.get("class", "object")].append(d)
 
-    phrases = []
+    sentences = []
     for cls, dets in by_class.items():
-        if len(dets) >= 2:
-            phrases.append(_group_phrase(dets))
+        moving = [d for d in dets
+                  if d.get("motion", "still") in ("approaching", "crossing")]
+        if len(dets) >= 2 and not moving:
+            # calm, same-class cluster -> compact group phrase, no urgency word
+            sentences.append(_apply_urgency(_group_phrase(dets), "none"))
         else:
-            phrases.append(_single_phrase(dets[0]))
+            for d in dets:
+                sentences.append(
+                    _apply_urgency(_single_phrase(d),
+                                   d.get("urgency_band", "none"))
+                )
 
-    return ". ".join(p.capitalize() for p in phrases) + "."
+    return " ".join(s for s in sentences if s)
 
 
 def narrate_find(target, bbox, side, dist):
@@ -151,7 +180,123 @@ def narrate_path(verdict):
     return f"Obstacle {dist_str} ahead, {advice}."
 
 
+def narrate_overhead(result):
+    """
+    Build spoken warning for a detected head-height / upper-region obstacle.
+
+    Args:
+        result: dict returned by engine.path.analyze_overhead()
+
+    Returns:
+        Spoken warning string, or "" if no confirmed hazard exists.
+    """
+    if not result or not result.get("detected", False):
+        return ""
+
+    distance = result.get("distance_m")
+
+    if distance is None:
+        return "Head height obstacle ahead. Stop."
+
+    try:
+        distance = float(distance)
+    except (TypeError, ValueError):
+        return "Head height obstacle ahead. Stop."
+
+    if distance < 1.0:
+        return (
+            "Head height obstacle ahead, "
+            "less than one metre. Stop."
+        )
+
+    unit = "metre" if distance < 1.5 else "metres"
+
+    return (
+        f"Head height obstacle ahead, "
+        f"{distance:.0f} {unit}. Stop."
+    )
+
+
+def narrate_dropoff(result):
+    """
+    Build spoken warning for a confirmed descending step / curb / drop-off.
+
+    Args:
+        result: dict returned by engine.path.detect_dropoff()
+
+    Returns:
+        Spoken warning string, or "" if no confirmed hazard exists.
+    """
+    if not result or not result.get("detected", False):
+        return ""
+
+    distance = result.get("distance_m")
+
+    if distance is None:
+        return "Caution, step down ahead. Stop."
+
+    try:
+        distance = float(distance)
+    except (TypeError, ValueError):
+        return "Caution, step down ahead. Stop."
+
+    if distance < 1.0:
+        return (
+            "Caution, step down ahead, "
+            "less than one metre. Stop."
+        )
+
+    unit = "metre" if distance < 1.5 else "metres"
+
+    return (
+        f"Caution, step down ahead, "
+        f"{distance:.0f} {unit}. Stop."
+    )
+
+
+def narrate_staircase(result):
+    """
+    Build spoken warning for a confirmed staircase (ascending or descending).
+
+    Args:
+        result: dict returned by engine.path.detect_staircase(), optionally
+                with a "color" key set by the caller.
+
+    Returns:
+        Spoken warning string, or "" if no confirmed hazard exists.
+    """
+    if not result or not result.get("detected", False):
+        return ""
+
+    color = result.get("color")
+    noun = f"{color} staircase" if color else "staircase"
+
+    distance = result.get("distance_m")
+
+    if distance is None:
+        return f"Caution, {noun} ahead. Stop."
+
+    try:
+        distance = float(distance)
+    except (TypeError, ValueError):
+        return f"Caution, {noun} ahead. Stop."
+
+    if distance < 1.0:
+        return (
+            f"Caution, {noun} ahead, "
+            "less than one metre. Stop."
+        )
+
+    unit = "metre" if distance < 1.5 else "metres"
+
+    return (
+        f"Caution, {noun} ahead, "
+        f"{distance:.0f} {unit}. Stop."
+    )
+
+
 def narrate_read(text):
+
     """
     Build a spoken phrase for the 'read this' OCR intent.
 

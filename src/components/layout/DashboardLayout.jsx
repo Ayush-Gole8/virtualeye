@@ -1,8 +1,9 @@
 import React from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { LayoutDashboard, Eye, FileText, Settings, Mic, LogOut, Star } from 'lucide-react';
+import { LayoutDashboard, Eye, FileText, Settings, Mic, LogOut, Star, Brain, Zap } from 'lucide-react';
 import { useVoice } from '../../context/VoiceNavigationContext';
+import { useMode } from '../../context/ModeContext';
 
 const SidebarItem = ({ icon: Icon, label, path, active }) => {
   const navigate = useNavigate();
@@ -21,6 +22,7 @@ const SidebarItem = ({ icon: Icon, label, path, active }) => {
 const DashboardLayout = () => {
   const location = useLocation();
   const { isListening, toggleListening } = useVoice();
+  const { mode, toggleMode } = useMode();
   const navigate = useNavigate();
 
   const navItems = [
@@ -57,6 +59,30 @@ const DashboardLayout = () => {
           <h2 className="page-title">
             {navItems.find(i => i.path === location.pathname)?.label || 'Dashboard'}
           </h2>
+
+          {/* Priority / Naive mode toggle */}
+          <button
+            onClick={toggleMode}
+            title={mode === 'priority'
+              ? 'Priority Mode: Smart TTC-ranked filtering active. Click for Naive.'
+              : 'Naive Mode: All objects announced. Click for Priority.'}
+            style={{
+              display: 'flex', alignItems: 'center', gap: '6px',
+              padding: '6px 14px', borderRadius: '999px', border: 'none',
+              cursor: 'pointer', fontWeight: 600, fontSize: '13px',
+              background: mode === 'priority'
+                ? 'linear-gradient(135deg, #6366f1, #8b5cf6)'
+                : 'linear-gradient(135deg, #f59e0b, #ef4444)',
+              color: '#fff',
+              boxShadow: mode === 'priority'
+                ? '0 0 12px rgba(99,102,241,0.5)'
+                : '0 0 12px rgba(245,158,11,0.5)',
+              transition: 'all 0.25s ease',
+            }}
+          >
+            {mode === 'priority' ? <Brain size={15} /> : <Zap size={15} />}
+            {mode === 'priority' ? 'Priority' : 'Naive'}
+          </button>
 
           {/* Voice Status Indicator */}
           <div 
