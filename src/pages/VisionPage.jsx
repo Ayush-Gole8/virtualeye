@@ -3,6 +3,7 @@ import { motion } from 'framer-motion';
 import { Camera, Square, Play, Mic, AlertCircle, CheckCircle, Zap, X, RefreshCw } from 'lucide-react';
 import { useVoice } from '../context/VoiceNavigationContext';
 import { useMode } from '../context/ModeContext';
+import { useSettings } from '../context/SettingsContext';
 import toast from 'react-hot-toast';
 import './VisionPage.css';
 
@@ -24,6 +25,7 @@ const getFetchOptions = (options = {}) => {
 const VisionPage = () => {
   const { speak, cancelSpeech, suspendListening, resumeListening } = useVoice();
   const { mode } = useMode();
+  const { agility } = useSettings();
   
   const [isStreaming, setIsStreaming] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -53,6 +55,7 @@ const VisionPage = () => {
   const lastFrameRef = useRef(null);
   const speechMuteUntil = useRef(0); // suppress speech while answering questions
   const modeRef = useRef(mode);
+  const agilityRef = useRef(agility);
   const langRef = useRef(lang);
   const qaModeRef = useRef(qaMode);
   const qaInProgressRef = useRef(qaInProgress);
@@ -78,6 +81,10 @@ const VisionPage = () => {
   useEffect(() => {
     langRef.current = lang;
   }, [lang]);
+
+  useEffect(() => {
+    agilityRef.current = agility;
+  }, [agility]);
 
   useEffect(() => {
     qaModeRef.current = qaMode;
@@ -418,6 +425,8 @@ const VisionPage = () => {
       formData.append('frame', blob, 'frame.jpg');
       formData.append('lang', langRef.current);
       formData.append('mode', requestMode);
+      formData.append('agility', agilityRef.current);
+      formData.append('session_id', voiceSessionIdRef.current);
 
       const response = await fetch(`${API_BASE_URL}/analyze_frame`, getFetchOptions({
         method: 'POST',

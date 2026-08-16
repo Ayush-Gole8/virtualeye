@@ -4,6 +4,7 @@ import { motion } from 'framer-motion';
 import { LayoutDashboard, Eye, FileText, Settings, Mic, LogOut, Star, Brain, Zap } from 'lucide-react';
 import { useVoice } from '../../context/VoiceNavigationContext';
 import { useMode } from '../../context/ModeContext';
+import { useSettings } from '../../context/SettingsContext';
 
 const SidebarItem = ({ icon: Icon, label, path, active }) => {
   const navigate = useNavigate();
@@ -23,6 +24,7 @@ const DashboardLayout = () => {
   const location = useLocation();
   const { isListening, toggleListening } = useVoice();
   const { mode, toggleMode } = useMode();
+  const { agility, setAgility } = useSettings();
   const navigate = useNavigate();
 
   const navItems = [
@@ -83,6 +85,35 @@ const DashboardLayout = () => {
             {mode === 'priority' ? <Brain size={15} /> : <Zap size={15} />}
             {mode === 'priority' ? 'Priority: Hazards' : 'Naive: All'}
           </button>
+
+          {/* Mobility (agility) — tunes how early the backend flags approaching hazards */}
+          <label
+            style={{
+              display: 'flex', alignItems: 'center', gap: '6px',
+              fontWeight: 600, fontSize: '13px', color: '#94a3b8',
+            }}
+          >
+            Mobility
+            <select
+              value={agility}
+              onChange={(e) => setAgility(e.target.value)}
+              aria-label="Mobility: how much warning time you need for approaching hazards"
+              title={agility === 'high'
+                ? 'Fast: standard warning time for approaching hazards.'
+                : 'Cautious: hazards are announced earlier, giving you more time to react.'}
+              style={{
+                padding: '6px 12px', borderRadius: '999px', border: 'none',
+                cursor: 'pointer', fontWeight: 600, fontSize: '13px',
+                background: 'linear-gradient(135deg, #0ea5e9, #6366f1)',
+                color: '#fff',
+                boxShadow: '0 0 12px rgba(14,165,233,0.4)',
+                transition: 'all 0.25s ease',
+              }}
+            >
+              <option value="high">Fast</option>
+              <option value="low">Cautious</option>
+            </select>
+          </label>
 
           {/* Voice Status Indicator */}
           <div 

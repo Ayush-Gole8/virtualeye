@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { VoiceProvider } from './context/VoiceNavigationContext';
 import { ModeProvider } from './context/ModeContext';
+import { SettingsProvider } from './context/SettingsContext';
 
 // Pages
 import LandingPage from './pages/LandingPage';
@@ -44,9 +45,11 @@ function App() {
   return (
     <Router>
       <ModeProvider>
-        <VoiceProvider>
-          <AppContent />
-        </VoiceProvider>
+        <SettingsProvider>
+          <VoiceProvider>
+            <AppContent />
+          </VoiceProvider>
+        </SettingsProvider>
       </ModeProvider>
     </Router>
   );
