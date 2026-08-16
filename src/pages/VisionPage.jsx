@@ -22,7 +22,7 @@ const getFetchOptions = (options = {}) => {
 }; 
 
 const VisionPage = () => {
-  const { speak } = useVoice();
+  const { speak, cancelSpeech, suspendListening, resumeListening } = useVoice();
   const { mode } = useMode();
   
   const [isStreaming, setIsStreaming] = useState(false);
@@ -52,9 +52,44 @@ const VisionPage = () => {
   const latestTTS = useRef(null);
   const lastFrameRef = useRef(null);
   const speechMuteUntil = useRef(0); // suppress speech while answering questions
+  const modeRef = useRef(mode);
+  const langRef = useRef(lang);
+  const qaModeRef = useRef(qaMode);
+  const qaInProgressRef = useRef(qaInProgress);
+  const facingModeRef = useRef(facingMode);
+  const analysisInFlightRef = useRef(false);
+  const analysisRequestRef = useRef(0);
+  const analysisLoopRef = useRef(0);
+  const voiceSessionIdRef = useRef(
+    typeof crypto !== 'undefined' && crypto.randomUUID
+      ? crypto.randomUUID()
+      : `vision-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  );
 
   const isSpeechMuted = () => Date.now() < speechMuteUntil.current;
   const muteSpeechFor = (ms) => { speechMuteUntil.current = Date.now() + ms; };
+
+  useEffect(() => {
+    modeRef.current = mode;
+    analysisRequestRef.current += 1;
+    cancelSpeech();
+  }, [mode]);
+
+  useEffect(() => {
+    langRef.current = lang;
+  }, [lang]);
+
+  useEffect(() => {
+    qaModeRef.current = qaMode;
+  }, [qaMode]);
+
+  useEffect(() => {
+    qaInProgressRef.current = qaInProgress;
+  }, [qaInProgress]);
+
+  useEffect(() => {
+    facingModeRef.current = facingMode;
+  }, [facingMode]);
 
   // Check calibration status, backend health, AND camera availability on mount
   useEffect(() => {
@@ -115,6 +150,7 @@ const VisionPage = () => {
     };
 
     const handleVoiceStop = () => stopCamera();
+    const handleVoiceSwitch = () => toggleCamera();
     
     const handleVoiceCapture = () => {
         if (!streamRef.current) {
@@ -134,6 +170,7 @@ const VisionPage = () => {
 
     window.addEventListener('voice-start-camera', handleVoiceStart);
     window.addEventListener('voice-stop-camera', handleVoiceStop);
+    window.addEventListener('voice-switch-camera', handleVoiceSwitch);
     window.addEventListener('voice-capture', handleVoiceCapture);
     window.addEventListener('voice-start-calibration', handleVoiceCalibration);
     window.addEventListener('voice-start-qa', handleVoiceQA);
@@ -149,6 +186,16 @@ const VisionPage = () => {
       }
 
       try {
+        setQaInProgress(true);
+        qaInProgressRef.current = true;
+        suspendListening();
+        cancelSpeech();
+        analysisRequestRef.current += 1;
+        analysisLoopRef.current += 1;
+        if (intervalRef.current) {
+          clearTimeout(intervalRef.current);
+          intervalRef.current = null;
+        }
         muteSpeechFor(7000); // silence periodic descriptions while answering
         const blob = await captureFrame();
         if (!blob) { speak("Could not capture a frame to answer your question."); return; }
@@ -156,17 +203,27 @@ const VisionPage = () => {
         const formData = new FormData();
         formData.append('frame', blob);
         formData.append('question', question);
+        formData.append('session_id', voiceSessionIdRef.current);
 
         const response = await fetch(`${API_BASE_URL}/question`, getFetchOptions({ method: 'POST', body: formData }));
         const data = await response.json();
         if (response.ok && data.answer) {
-          speak(data.answer);
+          muteSpeechFor(Math.max(10000, data.answer.length * 75 + 4000));
+          await speak(data.answer);
         } else {
-          speak(data.error || "I couldn't find an answer to that.");
+          const answerError = data.error || "I couldn't find an answer to that.";
+          muteSpeechFor(Math.max(8000, answerError.length * 75 + 3000));
+          await speak(answerError);
         }
       } catch (err) {
-        speak("I had trouble analysing the scene.");
+        muteSpeechFor(8000);
+        await speak("I had trouble analysing the scene. Please try again.");
         console.error('voice-scene-question error:', err);
+      } finally {
+        setQaInProgress(false);
+        qaInProgressRef.current = false;
+        resumeListening();
+        startPeriodicAnalysis();
       }
     };
     window.addEventListener('voice-scene-question', handleVoiceSceneQuestion);
@@ -181,6 +238,7 @@ const VisionPage = () => {
       }
       window.removeEventListener('voice-start-camera', handleVoiceStart);
       window.removeEventListener('voice-stop-camera', handleVoiceStop);
+      window.removeEventListener('voice-switch-camera', handleVoiceSwitch);
       window.removeEventListener('voice-capture', handleVoiceCapture);
       window.removeEventListener('voice-start-calibration', handleVoiceCalibration);
       window.removeEventListener('voice-start-qa', handleVoiceQA);
@@ -193,17 +251,18 @@ const VisionPage = () => {
 
     try {
       setError(null);
+      const requestedFacingMode = facingModeRef.current;
       // Use the current facingMode in the constraints
       const constraints = {
         video: { 
           width: { ideal: 640 }, 
           height: { ideal: 480 },
-          facingMode: facingMode // Key change here
+          facingMode: requestedFacingMode
         },
         audio: false
       };
 
-      speak(`Starting live camera with ${facingMode === 'user' ? 'front' : 'rear'} view.`); // Audio feedback
+      speak(`Starting the ${requestedFacingMode === 'user' ? 'front' : 'rear'} camera. Ask me about anything in view.`);
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       
       streamRef.current = stream;
@@ -213,12 +272,22 @@ const VisionPage = () => {
         // The following line is needed to apply the correct mirroring for 'user' (front) camera
         // In CSS, you'd apply transform: scaleX(-1) if facingMode is 'user'
       }
+
+      try {
+        await fetch(`${API_BASE_URL}/reset`, getFetchOptions({
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: voiceSessionIdRef.current }),
+        }));
+      } catch (resetError) {
+        console.warn('Could not reset backend temporal state:', resetError);
+      }
       
       setIsStreaming(true);
       startPeriodicAnalysis(); // Starts the AI Loop immediately
     } catch (err) {
       console.error(err);
-      setError(`Could not access camera (${facingMode}).`);
+      setError(`Could not access camera (${requestedFacingMode}).`);
       toast.error("Camera access denied or device not available");
       speak("I cannot access the camera.");
     }
@@ -230,9 +299,10 @@ const VisionPage = () => {
       streamRef.current = null;
     }
     if (intervalRef.current) {
-        clearInterval(intervalRef.current);
+        clearTimeout(intervalRef.current);
         intervalRef.current = null;
     }
+    analysisLoopRef.current += 1;
     if (videoRef.current) videoRef.current.srcObject = null;
 
     setIsStreaming(false);
@@ -241,28 +311,25 @@ const VisionPage = () => {
     setDetections([]);
     setAnnotatedImage(null);
     latestTTS.current = null;
+    analysisRequestRef.current += 1;
+    cancelSpeech();
 
     if (!silent) speak("Camera stopped.");
   };
 
   // New function to switch cameras
   const toggleCamera = () => {
-    if (isStreaming) {
+    const currentFacingMode = facingModeRef.current;
+    const newFacingMode = currentFacingMode === 'user' ? 'environment' : 'user';
+    facingModeRef.current = newFacingMode;
+    setFacingMode(newFacingMode);
+
+    if (streamRef.current) {
       // 1. Stop the current stream silently
       stopCamera(true); 
-      
-      // 2. Toggle the facing mode
-      const newFacingMode = facingMode === 'user' ? 'environment' : 'user';
-      setFacingMode(newFacingMode);
-
-      // 3. Restart the camera with the new mode
-      // Note: startCamera will run in the next render cycle due to the state update,
-      // but we can call it directly to avoid a delay.
-      // We pass the new mode to avoid relying on the still-to-update state
       restartCameraWithMode(newFacingMode);
     } else {
-        // If not streaming, just toggle the mode
-        setFacingMode(facingMode === 'user' ? 'environment' : 'user');
+      speak(`${newFacingMode === 'user' ? 'Front' : 'Rear'} camera selected.`);
     }
   };
 
@@ -287,6 +354,16 @@ const VisionPage = () => {
           if (videoRef.current) {
               videoRef.current.srcObject = stream;
           }
+
+          try {
+              await fetch(`${API_BASE_URL}/reset`, getFetchOptions({
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ session_id: voiceSessionIdRef.current }),
+              }));
+          } catch (resetError) {
+              console.warn('Could not reset backend temporal state:', resetError);
+          }
           
           setIsStreaming(true);
           startPeriodicAnalysis();
@@ -308,7 +385,7 @@ const VisionPage = () => {
     canvas.height = 360;
     
     // Apply horizontal flip for 'user' facing mode during capture to match user expectation (optional)
-    if (facingMode === 'user') {
+    if (facingModeRef.current === 'user') {
       ctx.translate(canvas.width, 0);
       ctx.scale(-1, 1);
     }
@@ -316,7 +393,7 @@ const VisionPage = () => {
     ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
     
     // Reset canvas transformation
-    if (facingMode === 'user') {
+    if (facingModeRef.current === 'user') {
         ctx.setTransform(1, 0, 0, 1, 0, 0);
     }
 
@@ -324,17 +401,23 @@ const VisionPage = () => {
   };
 
   const analyzeFrame = async () => {
-    if (isAnalyzing) return;
-    if (qaInProgress) return; // pause analysis while QA is running
+    if (analysisInFlightRef.current) return;
+    if (qaInProgressRef.current) return;
+
+    const requestId = analysisRequestRef.current + 1;
+    analysisRequestRef.current = requestId;
+    const requestMode = modeRef.current;
+
     try {
+      analysisInFlightRef.current = true;
       setIsAnalyzing(true);
       const blob = await captureFrame();
       if (!blob) return;
 
       const formData = new FormData();
       formData.append('frame', blob, 'frame.jpg');
-      formData.append('lang', lang);
-      formData.append('mode', mode); // 'priority' | 'naive'
+      formData.append('lang', langRef.current);
+      formData.append('mode', requestMode);
 
       const response = await fetch(`${API_BASE_URL}/analyze_frame`, getFetchOptions({
         method: 'POST',
@@ -344,22 +427,16 @@ const VisionPage = () => {
       if (!response.ok) throw new Error("Network error");
       
       const data = await response.json();
+      if (
+        requestId !== analysisRequestRef.current
+        || requestMode !== modeRef.current
+        || data.mode !== requestMode
+      ) {
+        return;
+      }
+
       if (data) {
-        // Update detections
-        if (data.detections && data.detections.length > 0) {
-          setDetections(data.detections);
-          // Only speak detections if NOT in Q&A mode (to keep it quiet during Q&A)
-          if (!qaInProgress && !qaMode && !isSpeechMuted()) {
-            const objSummary = data.detections
-              .map(d => `${d.class} on your ${d.side}, ${d.distance_str} away`)
-              .join('. ');
-            if (objSummary) {
-              speak(objSummary);
-            }
-          }
-        } else {
-          setDetections([]);
-        }
+        setDetections(data.detections || []);
 
         // Determine caption: prefer backend caption but replace BLIP-2 "not loaded" messages
         let caption = data.caption || '';
@@ -378,10 +455,15 @@ const VisionPage = () => {
 
         if (caption) {
           setCurrentDescription(caption);
-          // Only speak caption if NOT in Q&A mode (to keep it quiet during Q&A)
-          if (!qaInProgress && !qaMode && !isSpeechMuted() && (!data.detections || data.detections.length === 0)) {
-            speak(caption);
-          }
+        }
+
+        if (
+          data.speech
+          && !qaInProgressRef.current
+          && !qaModeRef.current
+          && !isSpeechMuted()
+        ) {
+          speak(data.speech);
         }
 
         // Handle wall alerts with 3-second cooldown (handled by backend)
@@ -389,11 +471,9 @@ const VisionPage = () => {
           const wallMsg = data.wall_alert.message;
           if (data.wall_alert.urgent) {
             // Urgent wall alert - speak immediately and show toast
-            speak(wallMsg);
             toast.error(wallMsg, { duration: 5000 });
           } else {
             // Regular wall alert
-            speak(wallMsg);
             toast(wallMsg, { icon: '⚠️', duration: 3000 });
           }
         }
@@ -407,17 +487,29 @@ const VisionPage = () => {
       console.error(err);
       setError('Analysis failed: ' + err.message);
     } finally {
+      analysisInFlightRef.current = false;
       setIsAnalyzing(false);
     }
   };
 
   const startPeriodicAnalysis = () => {
-    analyzeFrame(); // Run once immediately
+    const loopId = analysisLoopRef.current + 1;
+    analysisLoopRef.current = loopId;
+
     if (intervalRef.current) {
-      clearInterval(intervalRef.current);
+      clearTimeout(intervalRef.current);
       intervalRef.current = null;
     }
-    intervalRef.current = setInterval(analyzeFrame, 2500); // Then every 2.5s
+
+    const runAndSchedule = async () => {
+      if (loopId !== analysisLoopRef.current || !streamRef.current) return;
+      await analyzeFrame();
+      if (loopId === analysisLoopRef.current && streamRef.current) {
+        intervalRef.current = setTimeout(runAndSchedule, 2500);
+      }
+    };
+
+    runAndSchedule();
   };
 
   const handleCalibrate = async () => {
@@ -468,10 +560,12 @@ const VisionPage = () => {
 
     // Pause periodic analysis and mark QA in progress
     setQaInProgress(true);
+    qaInProgressRef.current = true;
+    analysisLoopRef.current += 1;
     muteSpeechFor(6000); // keep quiet during and shortly after the answer
     toast.dismiss();
     if (intervalRef.current) {
-      clearInterval(intervalRef.current);
+      clearTimeout(intervalRef.current);
       intervalRef.current = null;
     }
 
@@ -486,6 +580,7 @@ const VisionPage = () => {
       const formData = new FormData();
       formData.append('frame', blob);
       formData.append('question', qaQuestion);
+      formData.append('session_id', voiceSessionIdRef.current);
 
       const response = await fetch(`${API_BASE_URL}/question`, getFetchOptions({
         method: 'POST',
@@ -508,6 +603,7 @@ const VisionPage = () => {
     } finally {
       // Resume periodic analysis
       setQaInProgress(false);
+      qaInProgressRef.current = false;
       startPeriodicAnalysis();
     }
   };
@@ -528,7 +624,7 @@ const VisionPage = () => {
     <div className="webcam-component">
       <div className="webcam-header">
         <h2>Real-time Vision Analysis 3.0</h2>
-        <p>YOLOv8 Detection + ByteTrack + BLIP Scene Understanding</p>
+        <p>YOLOv8 + ByteTrack + Depth Anything + Florence-2</p>
         {!isCalibrated && (
           <div className="calibration-warning">
             <AlertCircle size={18} />

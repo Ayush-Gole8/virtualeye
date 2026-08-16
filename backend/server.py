@@ -51,6 +51,7 @@ from engine import path as eng_path
 from engine import vlm as eng_vlm
 from engine import ocr as eng_ocr
 from engine import telemetry as eng_telemetry
+from engine import dialogue as eng_dialogue
 
 
 # ============== CONFIG ==============
@@ -118,6 +119,7 @@ if pyttsx3 is not None:
 
 # Change-detection state for priority announce-gate: track_id -> (dist_band, motion)
 _last_announced = {}
+dialogue_memory = eng_dialogue.DialogueMemoryStore()
 
 
 # ============== UTILITIES ==============
@@ -288,6 +290,272 @@ def qa_from_detections(question, detections):
     return f"I see: {', '.join(names)}."
 
 
+def detection_scene_items(detections):
+    """Convert enriched YOLO detections to the common relational item format."""
+    return [
+        {
+            "label": det.get("class"),
+            "bbox": det.get("bbox"),
+            "source": "yolo",
+            "distance": det.get("distance"),
+            "side": det.get("side"),
+        }
+        for det in detections
+        if det.get("class") and det.get("bbox")
+    ]
+
+
+def collect_scene_items(frame, detections):
+    """Combine fast YOLO facts with Florence dense-region labels when available."""
+    items = detection_scene_items(detections)
+    try:
+        items.extend(eng_vlm.dense_region_captions(frame))
+    except Exception as error:
+        print(f"[voice] Dense region caption unavailable: {error}")
+    return eng_dialogue.dedupe_scene_items(items)
+
+
+def locate_target_result(
+    frame,
+    target,
+    detections=None,
+    depth_map=None,
+    possessive=False,
+    include_action=True,
+):
+    """Locate a named object and return both structured facts and spoken guidance."""
+    h, w = frame.shape[:2]
+    if detections is None or depth_map is None:
+        detections, depth_map = simple_detection_facts(frame)
+
+    aliases = eng_dialogue.surface_aliases(target) if eng_dialogue.extract_surface(target) else [target]
+    matches = [
+        det for det in detections
+        if any(eng_dialogue.labels_match(det.get("class"), alias) for alias in aliases)
+    ]
+
+    tentative = False
+    source = "yolo"
+    detected_label = target
+    if matches:
+        best = max(matches, key=lambda det: eng_dialogue.bbox_area(det["bbox"]))
+        bbox = best["bbox"]
+        side = best["side"]
+        distance = best["distance"]
+        detected_label = best.get("class", target)
+    else:
+        try:
+            result = eng_vlm.find_object(frame, target)
+        except Exception as error:
+            print(f"[voice] Open-vocabulary find failed for '{target}': {error}")
+            result = {"found": False}
+        if not result.get("found"):
+            speech = eng_narrate.narrate_find(
+                target, None, None, None, possessive=possessive,
+            )
+            return {
+                "target": target, "found": False, "bbox": None, "side": None,
+                "distance": None, "relation": None, "surface": None,
+                "source": None, "speech": speech,
+            }
+
+        bbox = result["bbox"]
+        side = choose_side(result["cx"], w)
+        distance = eng_depth.object_distance_from_depth(depth_map, bbox)
+        detected_label = result.get("label") or target
+        tentative = True
+        source = "florence_open_vocabulary"
+
+    support = eng_vlm.infer_support_surface(bbox, detections)
+    relation = support.get("relation") if support else None
+    surface = support.get("label") if support else None
+    speech = eng_narrate.narrate_find(
+        target,
+        bbox,
+        side,
+        distance,
+        relation=relation,
+        frame_shape=(h, w),
+        possessive=possessive,
+        tentative=tentative,
+        include_action=include_action,
+    )
+    return {
+        "target": target,
+        "detected_label": detected_label,
+        "found": True,
+        "bbox": list(map(float, bbox)),
+        "side": side,
+        "distance": distance,
+        "relation": relation,
+        "surface": surface,
+        "source": source,
+        "tentative": tentative,
+        "speech": speech,
+    }
+
+
+def locate_target(frame, target):
+    """Backward-compatible speech-only wrapper used by the /query endpoint."""
+    return locate_target_result(frame, target, possessive=True)["speech"]
+
+
+def remember_location(session_id, result):
+    """Store only conversational facts that remain meaningful on the next frame."""
+    dialogue_memory.update(
+        session_id,
+        last_target=result.get("target"),
+        last_found=result.get("found", False),
+        last_surface=result.get("surface"),
+        last_relation=result.get("relation"),
+    )
+
+
+def answer_surface_contents(frame, session_id, parsed, detections, depth_map):
+    surface = parsed.get("surface")
+    if not surface:
+        return {
+            "intent": "surface_contents",
+            "answer": "Please tell me which surface you want me to check, such as the table or desk.",
+        }
+
+    surface_result = locate_target_result(
+        frame,
+        surface,
+        detections=detections,
+        depth_map=depth_map,
+        include_action=False,
+    )
+    if not surface_result["found"]:
+        return {
+            "intent": "surface_contents",
+            "surface": surface,
+            "found": False,
+            "answer": f"I cannot see the {surface} clearly in the current view. Point the camera toward it and ask again.",
+        }
+
+    scene_items = collect_scene_items(frame, detections)
+    excluded = [parsed.get("exclude_target")] if parsed.get("exclude_target") else []
+    items = eng_dialogue.items_on_surface(
+        surface_result["bbox"],
+        scene_items,
+        surface,
+        exclude_labels=excluded,
+    )
+    answer = eng_narrate.narrate_surface_contents(
+        surface,
+        items,
+        exclude_target=parsed.get("exclude_target"),
+    )
+    dialogue_memory.update(
+        session_id,
+        last_surface=surface,
+        last_objects=[item["label"] for item in items],
+    )
+    return {
+        "intent": "surface_contents",
+        "surface": surface,
+        "found": True,
+        "objects": [item["label"] for item in items],
+        "answer": answer,
+    }
+
+
+def answer_nearby(frame, session_id, parsed, detections, depth_map):
+    target = parsed.get("target")
+    if not target:
+        return {
+            "intent": "nearby",
+            "answer": "Please name the object you want me to check around.",
+        }
+
+    target_result = locate_target_result(
+        frame,
+        target,
+        detections=detections,
+        depth_map=depth_map,
+        possessive=True,
+        include_action=False,
+    )
+    remember_location(session_id, target_result)
+    if not target_result["found"]:
+        return {"intent": "nearby", "target": target, "found": False, "answer": target_result["speech"]}
+
+    scene_items = collect_scene_items(frame, detections)
+    if target_result.get("surface"):
+        scene_items = [
+            item for item in scene_items
+            if not eng_dialogue.labels_match(item.get("label"), target_result["surface"])
+        ]
+    nearby = eng_dialogue.nearest_scene_item(
+        target_result["bbox"],
+        scene_items,
+        target_label=target_result.get("detected_label") or target,
+    )
+    answer = eng_narrate.narrate_nearby(target, nearby)
+    return {
+        "intent": "nearby",
+        "target": target,
+        "found": True,
+        "nearby": nearby.get("label") if nearby else None,
+        "answer": answer,
+    }
+
+
+def answer_scene_question(frame, question, session_id):
+    """Route a scene question through memory-aware, audio-first response logic."""
+    context = dialogue_memory.get(session_id)
+    parsed = eng_dialogue.classify_scene_question(question, context=context)
+    intent = parsed["intent"]
+
+    if intent == "describe":
+        caption = eng_vlm.describe_scene(frame)
+        return {
+            "intent": intent,
+            "answer": eng_narrate.narrate_scene_description(caption),
+        }
+
+    detections, depth_map = simple_detection_facts(frame)
+
+    if intent == "surface_contents":
+        return answer_surface_contents(frame, session_id, parsed, detections, depth_map)
+
+    if intent == "nearby":
+        return answer_nearby(frame, session_id, parsed, detections, depth_map)
+
+    if intent in {"locate", "distance", "side", "reach"}:
+        target = parsed.get("target")
+        if not target:
+            return {
+                "intent": intent,
+                "answer": "Please tell me which object you want me to find.",
+            }
+        result = locate_target_result(
+            frame,
+            target,
+            detections=detections,
+            depth_map=depth_map,
+            possessive=parsed.get("possessive", True),
+            include_action=intent in {"locate", "reach"},
+        )
+        remember_location(session_id, result)
+        return {
+            "intent": intent,
+            "target": target,
+            "found": result["found"],
+            "side": result.get("side"),
+            "distance": result.get("distance"),
+            "surface": result.get("surface"),
+            "tentative": result.get("tentative", False),
+            "answer": result["speech"],
+        }
+
+    return {
+        "intent": intent,
+        "answer": qa_from_detections(question, detections),
+    }
+
+
 # ============== ENDPOINTS ==============
 
 @app.route('/health', methods=['GET'])
@@ -315,7 +583,9 @@ def analyze_frame():
 
         t0 = time.perf_counter()
         file = request.files['frame']
-        mode = request.form.get('mode', 'priority')
+        mode = request.form.get('mode', 'priority').strip().lower()
+        if mode not in {'priority', 'naive'}:
+            mode = 'priority'
         session_id = request.form.get('session_id', '') or None
 
         # Agility setting controls TTC urgency band thresholds.
@@ -348,11 +618,24 @@ def analyze_frame():
 
         path_verdict = eng_path.analyze_path(depth_map, w, h)
         path_changed = eng_path.should_announce_verdict(path_verdict)
-        path_speech = (
-            eng_narrate.narrate_path(path_changed)
-            if path_changed
-            else ""
-        )
+        path_speech = ""
+        if path_changed:
+            if mode == 'naive':
+                path_speech = eng_narrate.narrate_path(path_changed)
+            elif (
+                path_changed.get('obstacle_m') is not None
+                and path_changed.get('advice') != 'clear'
+            ):
+                path_alert = {
+                    **path_changed,
+                    'detected': True,
+                    'confirmed': True,
+                    'distance_m': path_changed.get('obstacle_m'),
+                }
+                if eng_priority.should_announce_hazard_now(
+                    'path', path_alert, _last_announced
+                ):
+                    path_speech = eng_narrate.narrate_path(path_changed)
 
         # 3.1 Head-height / upper-body hazard alert
         overhead_result = eng_path.analyze_overhead(depth_map)
@@ -380,6 +663,7 @@ def analyze_frame():
             top = eng_priority.prioritize(
                 detections,
                 w,
+                frame_h=h,
                 top_k=PRIORITY_TOP_K,
                 min_score=PRIORITY_MIN_SCORE,
                 use_ttc=USE_TTC,
@@ -450,11 +734,20 @@ def analyze_frame():
 
         structural_speech = ""
         if dropoff_speech:
-            structural_speech = dropoff_speech
+            if eng_priority.should_announce_hazard_now(
+                'dropoff', dropoff_result, _last_announced
+            ):
+                structural_speech = dropoff_speech
         elif staircase_speech:
-            structural_speech = staircase_speech
+            if eng_priority.should_announce_hazard_now(
+                'staircase', staircase_result, _last_announced
+            ):
+                structural_speech = staircase_speech
         elif overhead_speech:
-            structural_speech = overhead_speech
+            if eng_priority.should_announce_hazard_now(
+                'overhead', overhead_result, _last_announced
+            ):
+                structural_speech = overhead_speech
 
         if structural_speech:
             speech = structural_speech
@@ -566,27 +859,13 @@ def query():
         frame = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
         if frame is None:
             return jsonify({"error": "Invalid image"}), 400
-        w = frame.shape[1]
-
         if intent == 'read':
             text = eng_ocr.read_text(frame, min_conf=0.25, detail=0)
             return jsonify({"speech": eng_narrate.narrate_read(text), "text": text})
 
         if intent == 'find':
             target = request.form.get('target', 'object')
-            detections, depth_map = simple_detection_facts(frame)
-            matches = [d for d in detections if target.lower() in d['class'].lower()]
-            if matches:
-                best = max(matches, key=lambda d: (d['bbox'][2] - d['bbox'][0]) * (d['bbox'][3] - d['bbox'][1]))
-                speech = eng_narrate.narrate_find(target, best['bbox'], best['side'], best['distance'])
-            else:
-                r = eng_vlm.find_object(frame, target)
-                if r['found']:
-                    side = choose_side(r['cx'], w)
-                    dist = eng_depth.object_distance_from_depth(depth_map, r['bbox'])
-                    speech = eng_narrate.narrate_find(target, r['bbox'], side, dist)
-                else:
-                    speech = eng_narrate.narrate_find(target, None, None, None)
+            speech = locate_target(frame, target)
             return jsonify({"speech": speech})
 
         # describe
@@ -602,24 +881,25 @@ def query():
 
 @app.route('/question', methods=['POST'])
 def ask_question():
-    """Rule-based Q&A over detections (kept for backward compatibility)."""
+    """Session-aware, voice-first scene Q&A over the current camera frame."""
     try:
         if 'frame' not in request.files or 'question' not in request.form:
             return jsonify({"error": "Missing frame or question"}), 400
         file = request.files['frame']
-        question = request.form['question']
+        question = request.form['question'].strip()
+        session_id = eng_dialogue.sanitize_session_id(request.form.get('session_id'))
 
         file_bytes = np.frombuffer(file.read(), np.uint8)
         frame = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
         if frame is None:
             return jsonify({"error": "Invalid image"}), 400
 
-        if any(k in question.lower() for k in ["describe", "what do you see", "what is here"]):
-            answer = eng_vlm.describe_scene(frame)
-        else:
-            detections, _ = simple_detection_facts(frame)
-            answer = qa_from_detections(question, detections)
-        return jsonify({"question": question, "answer": answer})
+        response = answer_scene_question(frame, question, session_id)
+        return jsonify({
+            "question": question,
+            "session_id": session_id,
+            **response,
+        })
 
     except Exception as e:
         print(f"[question] {e}")
@@ -773,7 +1053,7 @@ def ocr_pdf():
         return jsonify({"error": str(e)}), 500
 
 
-def reset_all_engine_state():
+def reset_all_engine_state(session_id=None):
     """
     Clear all temporal engine state.
 
@@ -793,6 +1073,14 @@ def reset_all_engine_state():
     eng_priority.reset_priority_state()
     eng_path.reset_path_state()   # clears BOTH path last-state AND drop-off streak
     _last_announced = {}
+    dialogue_memory.reset(session_id)
+
+    predictor = getattr(model, 'predictor', None)
+    for tracker in getattr(predictor, 'trackers', []) or []:
+        reset_tracker = getattr(tracker, 'reset', None)
+        if callable(reset_tracker):
+            reset_tracker()
+
     print("[RESET] All engine temporal state cleared.")
 
 
@@ -805,7 +1093,9 @@ def reset_session():
     session or the camera feed is restarted, so no stale hazard state
     bleeds across sessions.
     """
-    reset_all_engine_state()
+    payload = request.get_json(silent=True) or {}
+    session_id = payload.get("session_id") or request.form.get("session_id")
+    reset_all_engine_state(session_id=session_id)
     return jsonify({"status": "reset", "message": "All engine state cleared."})
 
 

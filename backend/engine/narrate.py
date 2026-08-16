@@ -133,7 +133,87 @@ def narrate(priority_dets):
     return " ".join(s for s in sentences if s)
 
 
-def narrate_find(target, bbox, side, dist):
+def _spoken_target(target, possessive=False):
+    target = str(target or "object").strip().lower()
+    for article in ("your ", "the ", "a ", "an "):
+        if target.startswith(article):
+            target = target[len(article):]
+            break
+    return f"your {target}" if possessive else f"the {target}"
+
+
+def _vertical_position(bbox, frame_shape=None):
+    if not bbox or not frame_shape:
+        return "hand level"
+    height = float(frame_shape[0])
+    center_y = (float(bbox[1]) + float(bbox[3])) / 2.0
+    if center_y < 0.36 * height:
+        return "above hand level"
+    if center_y > 0.70 * height:
+        return "below hand level"
+    return "hand level"
+
+
+def _position_phrase(side, vertical):
+    if side == "left":
+        direction = "slightly to your left"
+    elif side == "right":
+        direction = "slightly to your right"
+    else:
+        direction = "straight ahead"
+    return f"{direction}, at about {vertical}"
+
+
+def _reach_instruction(side, vertical, dist):
+    if dist is None:
+        return "Keep the camera pointed at it and move closer slowly before reaching."
+    try:
+        dist = float(dist)
+    except (TypeError, ValueError):
+        return "Keep the camera pointed at it and move closer slowly before reaching."
+    if dist > 0.9:
+        return "It is beyond comfortable reach. Move closer slowly, then ask me again before reaching."
+
+    if side == "right":
+        action = "Extend your right hand slightly forward"
+    elif side == "left":
+        action = "Extend your left hand slightly forward"
+    else:
+        action = "Reach straight ahead slowly"
+
+    if vertical == "above hand level":
+        action += " and raise it a little"
+    elif vertical == "below hand level":
+        action += " and lower it a little"
+    return f"{action}."
+
+
+def _distance_phrase(dist):
+    if dist is None:
+        return None
+    try:
+        dist = float(dist)
+    except (TypeError, ValueError):
+        return None
+    if dist < 0.9:
+        return "within arm's reach"
+    if dist < 1.0:
+        return "less than one metre away"
+    unit = "metre" if dist < 1.5 else "metres"
+    return f"about {dist:.1f} {unit} away"
+
+
+def narrate_find(
+    target,
+    bbox,
+    side,
+    dist,
+    relation=None,
+    frame_shape=None,
+    possessive=False,
+    tentative=False,
+    include_action=True,
+):
     """
     Build a guiding sentence for the 'find my X' feature.
 
@@ -142,20 +222,88 @@ def narrate_find(target, bbox, side, dist):
         bbox: [x1,y1,x2,y2] or None if not found
         side: 'left'/'center'/'right'
         dist: distance in metres or None
+        relation: optional support relation such as 'on the table'
+        frame_shape: image shape used for above/below hand-level guidance
+        possessive: say 'your bottle' instead of 'the bottle'
+        tentative: use cautious wording for open-vocabulary model matches
+        include_action: append a conservative reach/move instruction
 
     Returns:
         spoken guidance string
     """
+    spoken_target = _spoken_target(target, possessive=possessive)
     if bbox is None:
-        return f"I cannot find a {target} right now. Try moving your camera slowly."
+        return (
+            f"I cannot see {spoken_target} in the current view. "
+            "Slowly pan the camera from left to right, keeping it level, then ask me again."
+        )
 
-    side_word = "straight ahead" if side == "center" else f"to your {side}"
-    if dist is not None:
-        if dist < 0.6:
-            reach = "within arm's reach"
-            return f"{target} found, {reach}, {side_word}."
-        return f"{target} found, {dist:.0f} metres {side_word}."
-    return f"{target} found, {side_word}."
+    lead = (
+        f"I can see what appears to be {spoken_target}."
+        if tentative else f"I found {spoken_target}."
+    )
+    vertical = _vertical_position(bbox, frame_shape)
+    details = []
+    if relation:
+        details.append(f"It appears to be {relation}")
+    else:
+        details.append("It is")
+    details.append(_position_phrase(side, vertical))
+    distance = _distance_phrase(dist)
+    if distance:
+        details.append(distance)
+    location = ", ".join(details) + "."
+
+    if not include_action:
+        return f"{lead} {location}"
+    return f"{lead} {location} {_reach_instruction(side, vertical, dist)}"
+
+
+def narrate_surface_contents(surface, items, exclude_target=None):
+    """Speak a compact, cautious list of items associated with a surface."""
+    labels = [str(item.get("label", "")).strip() for item in items if item.get("label")]
+    if not labels:
+        if exclude_target:
+            return f"I do not see another clear item on the {surface} right now."
+        return f"I cannot confirm any clear items on the {surface} in this view."
+    if len(labels) == 1:
+        listing = labels[0]
+    else:
+        listing = ", ".join(labels[:-1]) + f", and {labels[-1]}"
+    return f"On the {surface}, I can see what appears to be {listing}."
+
+
+def narrate_nearby(target, nearby_item):
+    if not nearby_item:
+        return f"I cannot identify another clear item next to {_spoken_target(target, True)}."
+    relation = nearby_item.get("relation")
+    label = nearby_item.get("label", "another object")
+    target_name = _spoken_target(target, True)
+    if relation in {"left", "right"}:
+        relation_text = f"to the {relation} of {target_name}"
+    elif relation in {"above", "below"}:
+        relation_text = f"{relation} {target_name}"
+    else:
+        relation_text = f"near {target_name}"
+    return f"The closest clear item is the {label}, {relation_text}."
+
+
+def narrate_scene_description(caption, max_words=48):
+    """Turn Florence's image-caption style into a short first-person response."""
+    text = " ".join(str(caption or "").strip().split())
+    if not text:
+        return "I cannot describe the current view clearly."
+    lowered = text.lower()
+    for prefix in ("the image shows ", "the image depicts ", "in the image, ", "in this image, "):
+        if lowered.startswith(prefix):
+            text = text[len(prefix):]
+            break
+    words = text.split()
+    if len(words) > max_words:
+        text = " ".join(words[:max_words]).rstrip(" ,;:") + "."
+    if text:
+        text = text[0].lower() + text[1:]
+    return f"I can see {text}".rstrip()
 
 
 def narrate_path(verdict):
@@ -171,13 +319,26 @@ def narrate_path(verdict):
     if verdict is None:
         return ""
     if verdict["clear"]:
-        return "Path clear."
+        return ""
     obstacle_m = verdict.get("obstacle_m")
-    dist_str = f"{obstacle_m:.0f} metres" if obstacle_m else "just ahead"
+    if obstacle_m is None:
+        return ""
+
+    try:
+        obstacle_m = float(obstacle_m)
+    except (TypeError, ValueError):
+        return ""
+
+    if obstacle_m < 1.0:
+        dist_str = "less than one metre"
+    else:
+        unit = "metre" if obstacle_m < 1.5 else "metres"
+        dist_str = f"{obstacle_m:.0f} {unit}"
+
     advice = verdict.get("advice_str", "")
     if verdict["advice"] == "stop":
-        return f"Stop. Obstacle {dist_str} ahead, {advice}."
-    return f"Obstacle {dist_str} ahead, {advice}."
+        return f"Stop. Obstacle {dist_str} ahead."
+    return f"Obstacle {dist_str} ahead. {advice.capitalize()}."
 
 
 def narrate_overhead(result):

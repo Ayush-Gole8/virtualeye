@@ -41,6 +41,7 @@ References:
 from __future__ import annotations
 
 from collections import defaultdict, deque
+import time
 
 
 # ---------------------------------------------------------------------------
@@ -91,6 +92,44 @@ DYNAMIC_CLASSES = {
 }
 
 
+ANIMATED_HAZARD_CLASSES = {
+    *DYNAMIC_CLASSES,
+    "dog",
+    "cat",
+}
+
+
+STATIC_OBSTACLE_CLASSES = {
+    "person",
+    "dog",
+    "cat",
+    "chair",
+    "couch",
+    "dining table",
+    "bench",
+    "door",
+    "staircase",
+    "bed",
+    "toilet",
+    "potted plant",
+    "backpack",
+    "handbag",
+    "suitcase",
+}
+
+
+TRIP_HAZARD_CLASSES = {
+    "bottle",
+    "cup",
+    "book",
+    "sports ball",
+    "skateboard",
+    "backpack",
+    "handbag",
+    "suitcase",
+}
+
+
 MOTION_BONUS = {
     "approaching": 3,
     "crossing": 2,
@@ -116,6 +155,16 @@ LOW_AGILITY_TTC_MEDIUM_S = 8.0
 
 TTC_DEBOUNCE_FRAMES = 3
 TTC_HISTORY_SIZE = 6
+
+
+STATIC_RISK_DISTANCE_M = 1.75
+TRIP_RISK_DISTANCE_M = 1.0
+CROSSING_RISK_DISTANCE_M = 4.0
+VEHICLE_RISK_DISTANCE_M = 3.0
+OBJECT_REMINDER_S = 8.0
+OBJECT_STATE_CHANGE_COOLDOWN_S = 4.0
+SEMANTIC_DEDUP_S = OBJECT_REMINDER_S
+HAZARD_REMINDER_S = 8.0
 
 
 class TTCDebouncer:
@@ -358,6 +407,101 @@ def dynamic_threat_weight(det):
     return 2.0
 
 
+def _valid_distance(det):
+    distance = det.get("distance")
+    if distance is None:
+        return None
+
+    try:
+        distance = float(distance)
+    except (TypeError, ValueError):
+        return None
+
+    if distance < 0.0:
+        return None
+
+    return distance
+
+
+def _is_in_path(det, frame_w):
+    try:
+        center_x = float(det.get("cx", frame_w / 2.0))
+    except (TypeError, ValueError):
+        center_x = frame_w / 2.0
+
+    return frame_w * 0.33 <= center_x <= frame_w * 0.66
+
+
+def _is_low_in_frame(det, frame_h):
+    if frame_h is None:
+        return True
+
+    bbox = det.get("bbox")
+    if not bbox or len(bbox) != 4:
+        return True
+
+    try:
+        bottom = float(bbox[3])
+        frame_h = float(frame_h)
+    except (TypeError, ValueError):
+        return True
+
+    if frame_h <= 0.0:
+        return True
+
+    return bottom >= frame_h * 0.55
+
+
+def is_actionable_risk(det, frame_w, frame_h=None):
+    """Return True only for an object that warrants automatic speech."""
+    cls = str(det.get("class", "")).strip().lower()
+    motion = str(det.get("motion", "still")).strip().lower()
+    urgency = str(det.get("urgency_band", "none")).strip().lower()
+    distance = _valid_distance(det)
+    in_path = _is_in_path(det, frame_w)
+
+    if motion == "approaching" and cls in ANIMATED_HAZARD_CLASSES:
+        if urgency in {"critical", "high"}:
+            return bool(det.get("ttc_high_confirmed", False))
+        if urgency == "medium":
+            return True
+
+    if (
+        motion == "crossing"
+        and cls in ANIMATED_HAZARD_CLASSES
+        and distance is not None
+        and distance <= CROSSING_RISK_DISTANCE_M
+    ):
+        return True
+
+    if (
+        cls in VEHICLE_CLASSES
+        and in_path
+        and distance is not None
+        and distance <= VEHICLE_RISK_DISTANCE_M
+    ):
+        return True
+
+    if (
+        cls in STATIC_OBSTACLE_CLASSES
+        and in_path
+        and distance is not None
+        and distance <= STATIC_RISK_DISTANCE_M
+    ):
+        return True
+
+    if (
+        cls in TRIP_HAZARD_CLASSES
+        and in_path
+        and distance is not None
+        and distance <= TRIP_RISK_DISTANCE_M
+        and _is_low_in_frame(det, frame_h)
+    ):
+        return True
+
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Priority score
 # ---------------------------------------------------------------------------
@@ -593,10 +737,12 @@ def update_ttc_state(
 def prioritize(
     detections,
     frame_w,
+    frame_h=None,
     top_k=2,
     min_score=4.0,
     use_ttc=True,
     agility="high",
+    actionable_only=True,
 ):
     """
     Select the most relevant detections.
@@ -645,6 +791,13 @@ def prioritize(
             float(score),
         )
 
+        if actionable_only and not is_actionable_risk(
+            det,
+            frame_w,
+            frame_h=frame_h,
+        ):
+            continue
+
         if det["priority"] >= min_score:
             scored.append(
                 (
@@ -672,6 +825,10 @@ def should_announce_now(
     det,
     track_id,
     last_announced,
+    now=None,
+    reminder_s=OBJECT_REMINDER_S,
+    state_change_cooldown_s=OBJECT_STATE_CHANGE_COOLDOWN_S,
+    semantic_dedup_s=SEMANTIC_DEDUP_S,
 ):
     """
     Decide whether the semantic state of a tracked detection has changed.
@@ -690,11 +847,7 @@ def should_announce_now(
         "still",
     )
 
-    band = urgency_band(
-        det.get(
-            "ttc"
-        )
-    )
+    band = det.get("urgency_band") or urgency_band(det.get("ttc"))
 
     # Distance bands.
     if dist is None:
@@ -734,18 +887,126 @@ def should_announce_now(
         band,
     )
 
-    previous = last_announced.get(
-        track_id
+    if now is None:
+        now = time.monotonic()
+
+    previous = last_announced.get(track_id)
+    if isinstance(previous, dict):
+        previous_key = previous.get("key")
+        previous_at = float(previous.get("at", 0.0))
+    else:
+        previous_key = previous
+        previous_at = 0.0
+
+    semantic_key = (
+        "semantic",
+        str(det.get("class", "object")).lower(),
+        det.get("side", "center"),
+        *key,
+    )
+    semantic_previous = last_announced.get(semantic_key)
+    semantic_at = (
+        float(semantic_previous.get("at", 0.0))
+        if isinstance(semantic_previous, dict)
+        else 0.0
     )
 
-    if previous != key:
-        last_announced[
-            track_id
-        ] = key
+    state_changed = previous_key != key
+    reminder_due = now - previous_at >= reminder_s
+    semantic_recent = (
+        isinstance(semantic_previous, dict)
+        and now - semantic_at < semantic_dedup_s
+    )
 
-        return True
+    if previous_key is not None and state_changed:
+        previous_distance, previous_motion, previous_band = previous_key
+        distance_rank = {"far": 0, "mid": 1, "near": 2}
+        motion_rank = {
+            "moving away": 0,
+            "still": 0,
+            "crossing": 1,
+            "approaching": 2,
+        }
+        urgency_rank = {
+            "none": 0,
+            "low": 1,
+            "medium": 2,
+            "high": 3,
+            "critical": 4,
+        }
+        escalated = (
+            distance_rank.get(dist_band, 0) > distance_rank.get(previous_distance, 0)
+            or motion_rank.get(motion, 0) > motion_rank.get(previous_motion, 0)
+            or urgency_rank.get(band, 0) > urgency_rank.get(previous_band, 0)
+        )
+        if not escalated and now - previous_at < state_change_cooldown_s:
+            return False
 
-    return False
+    if semantic_recent and state_changed:
+        return False
+
+    if not state_changed and not reminder_due:
+        return False
+
+    record = {"key": key, "at": now}
+    last_announced[track_id] = record
+    last_announced[semantic_key] = record
+    return True
+
+
+def should_announce_hazard_now(
+    hazard_type,
+    result,
+    last_announced,
+    now=None,
+    reminder_s=HAZARD_REMINDER_S,
+):
+    """Gate repeated structural warnings while allowing periodic reminders."""
+    cache_key = ("hazard", str(hazard_type).lower())
+
+    if not result or not result.get("detected", False):
+        return False
+
+    if now is None:
+        now = time.monotonic()
+
+    distance = result.get("distance_m")
+    try:
+        distance = float(distance)
+    except (TypeError, ValueError):
+        distance = None
+
+    if distance is None:
+        distance_band = "unknown"
+    elif distance < 1.0:
+        distance_band = "immediate"
+    elif distance < 2.0:
+        distance_band = "near"
+    else:
+        distance_band = "far"
+
+    state = (
+        distance_band,
+        bool(result.get("confirmed", result.get("detected", False))),
+        result.get("advice"),
+    )
+    previous = last_announced.get(cache_key)
+
+    if isinstance(previous, dict):
+        previous_state = previous.get("key")
+        previous_at = float(previous.get("at", 0.0))
+    else:
+        previous_state = None
+        previous_at = 0.0
+
+    if previous_state is not None and now - previous_at < reminder_s:
+        distance_rank = {"unknown": 0, "far": 1, "near": 2, "immediate": 3}
+        previous_band = previous_state[0]
+        if distance_rank.get(distance_band, 0) <= distance_rank.get(previous_band, 0):
+            return False
+
+    last_announced[cache_key] = {"key": state, "at": now}
+    return True
 
 
 def reset_priority_state():

@@ -64,8 +64,8 @@ const DashboardLayout = () => {
           <button
             onClick={toggleMode}
             title={mode === 'priority'
-              ? 'Priority Mode: Smart TTC-ranked filtering active. Click for Naive.'
-              : 'Naive Mode: All objects announced. Click for Priority.'}
+              ? 'Priority mode active: only actionable hazards are announced. Click for Naive.'
+              : 'Naive mode active: all detected objects are announced. Click for Priority.'}
             style={{
               display: 'flex', alignItems: 'center', gap: '6px',
               padding: '6px 14px', borderRadius: '999px', border: 'none',
@@ -81,7 +81,7 @@ const DashboardLayout = () => {
             }}
           >
             {mode === 'priority' ? <Brain size={15} /> : <Zap size={15} />}
-            {mode === 'priority' ? 'Priority' : 'Naive'}
+            {mode === 'priority' ? 'Priority: Hazards' : 'Naive: All'}
           </button>
 
           {/* Voice Status Indicator */}
