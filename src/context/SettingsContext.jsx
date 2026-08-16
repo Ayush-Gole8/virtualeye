@@ -3,6 +3,7 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 const SettingsContext = createContext();
 
 const AGILITY_STORAGE_KEY = 've_agility';
+const CUES_STORAGE_KEY = 've_cues';
 
 const readStoredAgility = () => {
   try {
@@ -13,16 +14,29 @@ const readStoredAgility = () => {
   }
 };
 
+const readStoredCues = () => {
+  try {
+    // Default on: absent key means the user has never opted out.
+    return localStorage.getItem(CUES_STORAGE_KEY) !== 'off';
+  } catch {
+    return true;
+  }
+};
+
 /**
  * SettingsProvider — wraps the app and exposes:
- *   agility     : 'high' | 'low'  (user mobility; tunes backend time-to-contact urgency)
- *   setAgility  : setter
+ *   agility      : 'high' | 'low'  (user mobility; tunes backend time-to-contact urgency)
+ *   setAgility   : setter
+ *   cuesEnabled  : boolean         (non-speech earcon + vibration cues; default on)
+ *   setCuesEnabled : setter
  *
- * Persists to localStorage ('ve_agility') and listens for 'voice-set-agility'
- * CustomEvents so voice commands can change it without a circular context dependency.
+ * Persists to localStorage ('ve_agility', 've_cues') and listens for
+ * 'voice-set-agility' / 'voice-set-cues' CustomEvents so voice commands can
+ * change them without a circular context dependency.
  */
 export const SettingsProvider = ({ children }) => {
   const [agility, setAgility] = useState(readStoredAgility); // default: high
+  const [cuesEnabled, setCuesEnabled] = useState(readStoredCues); // default: on
 
   useEffect(() => {
     try {
@@ -31,6 +45,14 @@ export const SettingsProvider = ({ children }) => {
       // ignore write failures — the setting still applies for this session
     }
   }, [agility]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(CUES_STORAGE_KEY, cuesEnabled ? 'on' : 'off');
+    } catch {
+      // ignore write failures — the setting still applies for this session
+    }
+  }, [cuesEnabled]);
 
   // Voice command bridge — VoiceNavigationContext fires this event
   useEffect(() => {
@@ -44,8 +66,21 @@ export const SettingsProvider = ({ children }) => {
     return () => window.removeEventListener('voice-set-agility', handler);
   }, []);
 
+  useEffect(() => {
+    const handler = (e) => {
+      const requested = e.detail?.cues;
+      if (typeof requested === 'boolean') {
+        setCuesEnabled(requested);
+      } else if (requested === 'on' || requested === 'off') {
+        setCuesEnabled(requested === 'on');
+      }
+    };
+    window.addEventListener('voice-set-cues', handler);
+    return () => window.removeEventListener('voice-set-cues', handler);
+  }, []);
+
   return (
-    <SettingsContext.Provider value={{ agility, setAgility }}>
+    <SettingsContext.Provider value={{ agility, setAgility, cuesEnabled, setCuesEnabled }}>
       {children}
     </SettingsContext.Provider>
   );

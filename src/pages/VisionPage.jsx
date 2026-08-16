@@ -4,6 +4,7 @@ import { Camera, Square, Play, Mic, AlertCircle, CheckCircle, Zap, X, RefreshCw 
 import { useVoice } from '../context/VoiceNavigationContext';
 import { useMode } from '../context/ModeContext';
 import { useSettings } from '../context/SettingsContext';
+import { selectCue, cueSignature, shouldFireCue, playEarcon, vibrateFor } from '../lib/cues';
 import toast from 'react-hot-toast';
 import './VisionPage.css';
 
@@ -25,7 +26,7 @@ const getFetchOptions = (options = {}) => {
 const VisionPage = () => {
   const { speak, cancelSpeech, suspendListening, resumeListening } = useVoice();
   const { mode } = useMode();
-  const { agility } = useSettings();
+  const { agility, cuesEnabled } = useSettings();
   
   const [isStreaming, setIsStreaming] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -56,6 +57,9 @@ const VisionPage = () => {
   const speechMuteUntil = useRef(0); // suppress speech while answering questions
   const modeRef = useRef(mode);
   const agilityRef = useRef(agility);
+  const cuesEnabledRef = useRef(cuesEnabled);
+  const audioCtxRef = useRef(null);
+  const lastCueRef = useRef({ sig: null, rank: 0, ts: 0 });
   const langRef = useRef(lang);
   const qaModeRef = useRef(qaMode);
   const qaInProgressRef = useRef(qaInProgress);
@@ -72,6 +76,60 @@ const VisionPage = () => {
   const isSpeechMuted = () => Date.now() < speechMuteUntil.current;
   const muteSpeechFor = (ms) => { speechMuteUntil.current = Date.now() + ms; };
 
+  // --- Non-speech cues (earcon + vibration) ---------------------------------
+  // The AudioContext is created lazily inside a user gesture (Start / Switch
+  // camera); browsers block or auto-suspend contexts created at load time.
+  const ensureAudioContext = () => {
+    try {
+      if (!audioCtxRef.current) {
+        const AudioCtor = window.AudioContext || window.webkitAudioContext;
+        if (!AudioCtor) return null;
+        audioCtxRef.current = new AudioCtor();
+      }
+      if (audioCtxRef.current.state === 'suspended') {
+        audioCtxRef.current.resume().catch(() => {});
+      }
+      return audioCtxRef.current;
+    } catch (err) {
+      console.warn('Could not initialise audio cues:', err);
+      return null;
+    }
+  };
+
+  const closeAudioContext = () => {
+    const ctx = audioCtxRef.current;
+    audioCtxRef.current = null;
+    lastCueRef.current = { sig: null, rank: 0, ts: 0 };
+    if (ctx && ctx.state !== 'closed') {
+      ctx.close().catch(() => {});
+    }
+  };
+
+  /**
+   * Emit at most one cue per frame. Gated exactly like speech, and de-duplicated
+   * because the loop re-sends the same alerts/urgency while a hazard persists.
+   */
+  const emitCue = (data) => {
+    if (!cuesEnabledRef.current) return;
+    if (qaInProgressRef.current || qaModeRef.current || isSpeechMuted()) return;
+
+    const cue = selectCue(data);
+    const prev = lastCueRef.current;
+
+    if (!cue) {
+      // Condition cleared: blank the signature so its return re-fires.
+      lastCueRef.current = { ...prev, sig: null, rank: 0 };
+      return;
+    }
+
+    const now = Date.now();
+    if (!shouldFireCue(prev, cue, now)) return;
+
+    lastCueRef.current = { sig: cueSignature(cue), rank: cue.rank, ts: now };
+    playEarcon(audioCtxRef.current, cue);
+    vibrateFor(cue.rank);
+  };
+
   useEffect(() => {
     modeRef.current = mode;
     analysisRequestRef.current += 1;
@@ -85,6 +143,10 @@ const VisionPage = () => {
   useEffect(() => {
     agilityRef.current = agility;
   }, [agility]);
+
+  useEffect(() => {
+    cuesEnabledRef.current = cuesEnabled;
+  }, [cuesEnabled]);
 
   useEffect(() => {
     qaModeRef.current = qaMode;
@@ -259,6 +321,7 @@ const VisionPage = () => {
     try {
       setError(null);
       const requestedFacingMode = facingModeRef.current;
+      ensureAudioContext(); // user gesture — only safe place to open the audio context
       // Use the current facingMode in the constraints
       const constraints = {
         video: { 
@@ -320,6 +383,7 @@ const VisionPage = () => {
     latestTTS.current = null;
     analysisRequestRef.current += 1;
     cancelSpeech();
+    closeAudioContext();
 
     if (!silent) speak("Camera stopped.");
   };
@@ -344,6 +408,7 @@ const VisionPage = () => {
   const restartCameraWithMode = async (mode) => {
       try {
           setError(null);
+          ensureAudioContext(); // stopCamera() closed it; the toggle is a user gesture
           const constraints = {
               video: { 
                   width: { ideal: 640 }, 
@@ -465,6 +530,11 @@ const VisionPage = () => {
         if (caption) {
           setCurrentDescription(caption);
         }
+
+        // Non-speech cues run alongside speech, and lead it slightly: the earcon
+        // localises the hazard while the sentence explains it. Scheduling is
+        // non-blocking, so this does not delay speak() below.
+        emitCue(data);
 
         if (
           data.speech

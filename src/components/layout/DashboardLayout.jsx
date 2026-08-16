@@ -1,7 +1,7 @@
 import React from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { LayoutDashboard, Eye, FileText, Settings, Mic, LogOut, Star, Brain, Zap } from 'lucide-react';
+import { LayoutDashboard, Eye, FileText, Settings, Mic, LogOut, Star, Brain, Zap, Volume2, VolumeX } from 'lucide-react';
 import { useVoice } from '../../context/VoiceNavigationContext';
 import { useMode } from '../../context/ModeContext';
 import { useSettings } from '../../context/SettingsContext';
@@ -24,7 +24,7 @@ const DashboardLayout = () => {
   const location = useLocation();
   const { isListening, toggleListening } = useVoice();
   const { mode, toggleMode } = useMode();
-  const { agility, setAgility } = useSettings();
+  const { agility, setAgility, cuesEnabled, setCuesEnabled } = useSettings();
   const navigate = useNavigate();
 
   const navItems = [
@@ -114,6 +114,31 @@ const DashboardLayout = () => {
               <option value="low">Cautious</option>
             </select>
           </label>
+
+          {/* Cues — non-speech earcon + vibration alongside spoken guidance */}
+          <button
+            onClick={() => setCuesEnabled(!cuesEnabled)}
+            role="switch"
+            aria-checked={cuesEnabled}
+            aria-label="Sound and vibration cues"
+            title={cuesEnabled
+              ? 'Cues on: hazards also play a tone and vibrate. Click to turn off.'
+              : 'Cues off: spoken guidance only. Click to turn on.'}
+            style={{
+              display: 'flex', alignItems: 'center', gap: '6px',
+              padding: '6px 14px', borderRadius: '999px', border: 'none',
+              cursor: 'pointer', fontWeight: 600, fontSize: '13px',
+              background: cuesEnabled
+                ? 'linear-gradient(135deg, #10b981, #14b8a6)'
+                : '#334155',
+              color: cuesEnabled ? '#fff' : '#94a3b8',
+              boxShadow: cuesEnabled ? '0 0 12px rgba(16,185,129,0.45)' : 'none',
+              transition: 'all 0.25s ease',
+            }}
+          >
+            {cuesEnabled ? <Volume2 size={15} /> : <VolumeX size={15} />}
+            {cuesEnabled ? 'Cues: On' : 'Cues: Off'}
+          </button>
 
           {/* Voice Status Indicator */}
           <div 
