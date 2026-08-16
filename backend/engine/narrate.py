@@ -34,7 +34,109 @@ def _apply_urgency(core, band):
     return f"{prefix} {core}." if prefix else f"{core}."
 
 
-def _single_phrase(det):
+# ----------------------------------------------------------------------------
+# Orientation & mobility wording (priority mode only).
+#
+# O&M instructors give bearings on a clock face and distances in paces, because
+# both are egocentric and need no external reference. "left/right + 2.3 metres"
+# is a sighted description of a scene; "11 o'clock, about three steps" is an
+# instruction the user can act on without translating anything.
+#
+# Only the forward arc is used: a walking user cannot act on 6 o'clock, and the
+# camera cannot see it anyway.
+# ----------------------------------------------------------------------------
+
+# How far the frame edges bend away from 12 o'clock. Raising this widens the
+# spread (frame edge reads as a sharper bearing); lowering it narrows it.
+_CLOCK_SPREAD = 2
+
+_CLOCK_HOURS = {-2: 10, -1: 11, 0: 12, 1: 1, 2: 2}
+
+# Average pace length in metres, used to convert distance into step counts.
+_STEP_LENGTH_M = 0.75
+
+
+def _clock_direction(cx, frame_w):
+    """
+    Map a bounding-box centre-x to a clock-face bearing.
+
+    Args:
+        cx: horizontal centre of the detection, in pixels
+        frame_w: frame width in pixels
+
+    Returns:
+        e.g. "11 o'clock", or None when cx/frame_w are unusable (the caller then
+        falls back to left/right wording rather than saying nothing).
+    """
+    try:
+        cx = float(cx)
+        frame_w = float(frame_w)
+    except (TypeError, ValueError):
+        return None
+
+    if frame_w <= 0:
+        return None
+
+    x = (cx / frame_w) * 2 - 1                      # normalise to [-1, 1]
+    offset = int(round(x * _CLOCK_SPREAD))
+    offset = max(-_CLOCK_SPREAD, min(_CLOCK_SPREAD, offset))
+
+    hour = _CLOCK_HOURS.get(offset)
+    if hour is None:
+        return None
+    return f"{hour} o'clock"
+
+
+def _steps_from_metres(m, step_len=_STEP_LENGTH_M):
+    """
+    Convert a distance in metres into a spoken step count.
+
+    Returns:
+        "right in front of you" / "one step" / "about three steps", or None when
+        the distance is missing or unparseable.
+    """
+    if m is None:
+        return None
+    try:
+        m = float(m)
+    except (TypeError, ValueError):
+        return None
+
+    if m < step_len:
+        return "right in front of you"
+
+    n = max(1, int(round(m / step_len)))
+    if n == 1:
+        return "one step"
+    return f"about {_count_word(n)} steps"
+
+
+def _om_location(det, frame_w):
+    """
+    Build the clock-face + step-count location clause for one detection.
+
+    Returns:
+        e.g. "at 11 o'clock, about three steps", or None if no bearing can be
+        derived (caller falls back to the metre/side wording).
+    """
+    clock = _clock_direction(det.get("cx"), frame_w)
+    if not clock:
+        return None
+    steps = _steps_from_metres(det.get("distance"))
+    return f"at {clock}, {steps}" if steps else f"at {clock}"
+
+
+def _nearest(dets):
+    """Closest detection; missing/unparseable distances sort last."""
+    def sort_key(d):
+        try:
+            return float(d.get("distance"))
+        except (TypeError, ValueError):
+            return float("inf")
+    return min(dets, key=sort_key)
+
+
+def _single_phrase(det, frame_w=None, use_clockface=False):
     """Build a phrase for one detection: 'red car approaching, 3 metres to your center'."""
     cls = det.get("class", "object")
 
@@ -49,6 +151,13 @@ def _single_phrase(det):
         "moving away": "moving away",
     }.get(det.get("motion", "still"))
     head = f"{noun} {motion_word}" if motion_word else noun
+
+    # O&M wording: 'chair at 11 o'clock, about three steps'.
+    if use_clockface and frame_w:
+        location = _om_location(det, frame_w)
+        if location:
+            return f"{head} {location}"
+        # No usable cx — fall through to the metre/side wording below.
 
     # Distance + side (mirror the hazard narrators' <1 m wording)
     dist = det.get("distance")
@@ -70,7 +179,7 @@ def _single_phrase(det):
     return f"{head}, {tail}"
 
 
-def _group_phrase(dets):
+def _group_phrase(dets, frame_w=None, use_clockface=False):
     """Group same-class objects: 'two people ahead, one in pink, one in black'."""
     cls = dets[0].get("class", "object")
     n = len(dets)
@@ -79,11 +188,21 @@ def _group_phrase(dets):
     plural = "people" if cls == "person" else f"{cls}s"
     head = f"{_count_word(n)} {plural}"
 
+    # O&M wording uses the nearest member's bearing — that is the one the user
+    # will reach first, so it is the one worth steering by.
+    located = False
+    if use_clockface and frame_w:
+        location = _om_location(_nearest(dets), frame_w)
+        if location:
+            head += f" {location}"
+            located = True
+
     # Common side if they share it
-    sides = {d.get("side", "front") for d in dets}
-    if len(sides) == 1:
-        side = sides.pop()
-        head += f" {'ahead' if side == 'center' else 'to your ' + side}"
+    if not located:
+        sides = {d.get("side", "front") for d in dets}
+        if len(sides) == 1:
+            side = sides.pop()
+            head += f" {'ahead' if side == 'center' else 'to your ' + side}"
 
     # Add colors if distinct and available
     colors = [d.get("color") for d in dets if d.get("color")]
@@ -94,7 +213,7 @@ def _group_phrase(dets):
     return head
 
 
-def narrate(priority_dets):
+def narrate(priority_dets, frame_w=None, use_clockface=False):
     """
     Build the final spoken sentence from prioritized detections.
 
@@ -104,6 +223,10 @@ def narrate(priority_dets):
 
     Args:
         priority_dets: list of top-priority detection dicts
+        frame_w: frame width in pixels; required for clock-face bearings
+        use_clockface: speak O&M wording (clock-face bearing + step count)
+            instead of side + metres. Requires frame_w. Left False for the
+            naive baseline so its wording stays fixed.
 
     Returns:
         spoken string. "Path clear." if nothing to announce.
@@ -122,11 +245,18 @@ def narrate(priority_dets):
                   if d.get("motion", "still") in ("approaching", "crossing")]
         if len(dets) >= 2 and not moving:
             # calm, same-class cluster -> compact group phrase, no urgency word
-            sentences.append(_apply_urgency(_group_phrase(dets), "none"))
+            sentences.append(
+                _apply_urgency(
+                    _group_phrase(dets, frame_w=frame_w, use_clockface=use_clockface),
+                    "none",
+                )
+            )
         else:
             for d in dets:
                 sentences.append(
-                    _apply_urgency(_single_phrase(d),
+                    _apply_urgency(_single_phrase(d,
+                                                  frame_w=frame_w,
+                                                  use_clockface=use_clockface),
                                    d.get("urgency_band", "none"))
                 )
 

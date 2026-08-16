@@ -676,7 +676,7 @@ def analyze_frame():
                 )
             ]
             object_speech = (
-                eng_narrate.narrate(changed)
+                eng_narrate.narrate(changed, frame_w=w, use_clockface=True)
                 if changed
                 else ""
             )
