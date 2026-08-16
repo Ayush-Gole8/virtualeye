@@ -5,11 +5,39 @@ import { Upload, Image as ImageIcon, AlertCircle, CheckCircle, X } from 'lucide-
 import axios from 'axios';
 import './Demo.css';
 
-const ImageUploadComponent = ({ apiUrl, lang, onAnalysisComplete, onError, onStartLoading, isLoading, onPlayAudio }) => {
+// Same resolution VisionPage uses — this is a Vite app, so the prefix is VITE_.
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+
+// Bypass the ngrok warning page when VITE_API_URL points at a tunnel, which
+// .env.example documents as a supported setup.
+const REQUEST_HEADERS = {
+  'Content-Type': 'multipart/form-data',
+  'ngrok-skip-browser-warning': 'true',
+};
+
+/**
+ * Mounted standalone at /dashboard/demopurpose, so every callback prop is
+ * optional: it keeps its own loading/result state and still forwards to a
+ * parent when one supplies them.
+ */
+const ImageUploadComponent = ({
+  apiUrl = API_BASE_URL,
+  lang,
+  onAnalysisComplete,
+  onError,
+  onStartLoading,
+  isLoading,
+  onPlayAudio,
+}) => {
   const [uploadedImage, setUploadedImage] = useState(null);
   const [previewUrl, setPreviewUrl] = useState(null);
   const [error, setError] = useState(null);
   const [showPreview, setShowPreview] = useState(true);
+  const [analysis, setAnalysis] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  // Parent-controlled when embedded, local when standalone.
+  const loading = isLoading !== undefined ? isLoading : busy;
 
   const onDrop = useCallback((acceptedFiles, rejectedFiles) => {
     setError(null);
@@ -44,6 +72,7 @@ const ImageUploadComponent = ({ apiUrl, lang, onAnalysisComplete, onError, onSta
       setPreviewUrl(null);
     }
     setError(null);
+    setAnalysis(null);
     setShowPreview(true);
   };
 
@@ -54,17 +83,17 @@ const ImageUploadComponent = ({ apiUrl, lang, onAnalysisComplete, onError, onSta
     }
 
     try {
-      onStartLoading();
+      setBusy(true);
+      onStartLoading?.();
       setError(null);
+      setAnalysis(null);
 
       const formData = new FormData();
       formData.append('frame', uploadedImage);
       formData.append('lang', lang || 'en');
 
       const response = await axios.post(`${apiUrl}/analyze_frame`, formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
+        headers: REQUEST_HEADERS,
         timeout: 30000
       });
 
@@ -78,14 +107,17 @@ const ImageUploadComponent = ({ apiUrl, lang, onAnalysisComplete, onError, onSta
           originalImage: previewUrl,
           ttsAudio: response.data.tts_audio // Store audio but don't play it automatically
         };
-        onAnalysisComplete(resultsData);
+        setAnalysis(resultsData);
+        onAnalysisComplete?.(resultsData);
       }
 
     } catch (err) {
       console.error('Analysis error:', err);
       const errorMessage = err.response?.data?.error || err.message || 'Analysis failed. Please try again.';
       setError(errorMessage);
-      onError(new Error(errorMessage));
+      onError?.(new Error(errorMessage));
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -136,6 +168,16 @@ const ImageUploadComponent = ({ apiUrl, lang, onAnalysisComplete, onError, onSta
               </div>
             )}
 
+            {analysis && (
+              <div className="image-preview">
+                <img
+                  src={analysis.annotatedImage || analysis.originalImage}
+                  alt="Analysis result"
+                  className="preview-image"
+                />
+              </div>
+            )}
+
             <div className="image-info">
               <div className="info-item">
                 <ImageIcon className="info-icon" />
@@ -152,9 +194,9 @@ const ImageUploadComponent = ({ apiUrl, lang, onAnalysisComplete, onError, onSta
               whileTap={{ scale: 0.98 }}
               onClick={analyzeImage}
               className="analyze-button"
-              disabled={isLoading}
+              disabled={loading}
             >
-              {isLoading ? 'Analyzing...' : 'Analyze Image'}
+              {loading ? 'Analyzing...' : 'Analyze Image'}
             </motion.button>
           </div>
         )}
@@ -170,7 +212,23 @@ const ImageUploadComponent = ({ apiUrl, lang, onAnalysisComplete, onError, onSta
           </motion.div>
         )}
 
-        {uploadedImage && (
+        {analysis && (
+          <div className="upload-tips">
+            <h4>Analysis result</h4>
+            <ul>
+              <li>{analysis.description || 'No description returned.'}</li>
+              {analysis.detections.length > 0 && (
+                <li>
+                  {analysis.detections.length} object
+                  {analysis.detections.length === 1 ? '' : 's'} detected:{' '}
+                  {[...new Set(analysis.detections.map(d => d.class))].join(', ')}
+                </li>
+              )}
+            </ul>
+          </div>
+        )}
+
+        {uploadedImage && !analysis && (
           <div className="upload-tips">
             <h4>Tips for better analysis:</h4>
             <ul>

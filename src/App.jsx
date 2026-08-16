@@ -30,6 +30,9 @@ function AppContent() {
         <Route path="/dashboard" element={<DashboardLayout />}>
           <Route index element={<DashboardHome />} />
           <Route path="vision" element={<VisionPage />} />
+          {/* "Voice Chat" is VisionPage's Ask-AI panel, not a separate page —
+              DashboardHome and the voice router both already target this path. */}
+          <Route path="chat" element={<VisionPage />} />
           <Route path="ocr" element={<OCRPage />} />
           <Route path="demopurpose" element={<Demo />} />
           
