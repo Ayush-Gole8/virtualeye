@@ -53,7 +53,7 @@ def _valid_distance(distance):
         <= MAX_VALID_DISTANCE_M
     )
 
-def update_motion(detections, frame_w):
+def update_motion(detections, frame_w, now_ts=None):
     """
     Annotate detections with motion and TTC information.
     Expected input fields per detection:
@@ -75,10 +75,14 @@ def update_motion(detections, frame_w):
     Args:
         detections: list of detection dictionaries
         frame_w: frame width in pixels
+        now_ts: optional timestamp in seconds for this frame. Live capture omits
+            it and the wall clock is used. Offline replay passes the frame's
+            VIDEO time, so dt — and therefore velocity and TTC — depend on the
+            recording rather than on how fast the machine happens to process it.
     Returns:
         Same detection list, annotated in place.
     """
-    now = time.monotonic()
+    now = now_ts if now_ts is not None else time.monotonic()
     seen_ids = set()
     for det in detections:
         tid = det.get("track_id", -1)

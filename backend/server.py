@@ -174,9 +174,15 @@ def speak(text):
         print(f"[TTS] {e}")
 
 
-def simple_detection_facts(frame):
+def simple_detection_facts(frame, frame_ts=None):
     """
     Run the full perception stack on a frame.
+
+    Args:
+        frame: BGR frame
+        frame_ts: optional timestamp in seconds used for motion dt. Live capture
+            leaves this None (wall clock); offline replay supplies the frame's
+            video time so TTC is reproducible across machines.
 
     Returns:
         (detections, depth_map)
@@ -216,7 +222,7 @@ def simple_detection_facts(frame):
                 "color": col,
             })
 
-    detections = eng_motion.update_motion(detections, w)
+    detections = eng_motion.update_motion(detections, w, now_ts=frame_ts)
     return detections, depth_map
 
 
@@ -601,6 +607,16 @@ def analyze_frame():
         if agility not in {"high", "low"}:
             agility = SAFETY_AGILITY_DEFAULT
 
+        # Offline replay supplies the frame's VIDEO time so motion dt comes from
+        # the recording instead of the wall clock, making velocity/TTC identical
+        # across machines and pacing settings. Live clients omit it.
+        frame_ts = request.form.get("frame_ts")
+        if frame_ts is not None:
+            try:
+                frame_ts = float(frame_ts)
+            except (TypeError, ValueError):
+                frame_ts = None
+
         file_bytes = np.frombuffer(file.read(), np.uint8)
         frame = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
         if frame is None:
@@ -609,7 +625,7 @@ def analyze_frame():
 
         eng_telemetry.start_session(session_id)
 
-        detections, depth_map = simple_detection_facts(frame)
+        detections, depth_map = simple_detection_facts(frame, frame_ts=frame_ts)
 
         # ------------------------------------------------------------------
         # Depth-based navigation and structural safety

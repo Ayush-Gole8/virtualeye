@@ -8,11 +8,14 @@ telemetry automatically to backend/study_logs/<session_id>.jsonl; run
 analyze_study.py afterwards to get the naive-vs-priority table.
 
 WHY PACING MATTERS:
-    engine/motion.py estimates closing speed and time-to-collision from the
-    WALL-CLOCK gap between consecutive frames. If we POST frames as fast as
-    possible, that gap is ~0 and TTC is meaningless. So we (a) sample the video
-    at `--interval` seconds of VIDEO time and (b) sleep so each POST is also
-    ~`--interval` seconds apart in REAL time. That reproduces live behaviour.
+    Motion dt comes from the `frame_ts` we send (the frame's VIDEO time), so
+    closing speed and TTC are reproducible: replaying the same clip at a
+    different --interval pacing yields the same TTC columns.
+
+    We still sample every `--interval` seconds of video AND sleep so each POST is
+    ~`--interval` apart in REAL time, because the announcement cooldowns and
+    hazard debounce on the server are still wall-clock based. Removing the sleep
+    would collapse those and change which lines get spoken.
 
 USAGE (run the server first: python server.py):
     # One clip in priority mode:
@@ -83,7 +86,16 @@ def replay(video_path, url, mode, interval, session_id, lang):
                 continue
 
             files = {"frame": ("frame.jpg", buf.tobytes(), "image/jpeg")}
-            data = {"mode": mode, "session_id": session_id, "lang": lang}
+            # frame_ts is this frame's position in VIDEO time. The server feeds it
+            # to motion.update_motion as dt's clock, so velocity/TTC depend on the
+            # recording, not on processing speed. Derived from frame_idx rather
+            # than the sent counter so a failed POST cannot shift later timestamps.
+            data = {
+                "mode": mode,
+                "session_id": session_id,
+                "lang": lang,
+                "frame_ts": f"{frame_idx / fps:.6f}",
+            }
 
             try:
                 r = requests.post(analyze, files=files, data=data,
