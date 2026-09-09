@@ -23,11 +23,28 @@ const getFetchOptions = (options = {}) => {
   };
 }; 
 
+// Visually hidden, but still announced by screen readers. Absolutely positioned
+// and 1px, so adding it anywhere leaves the visual layout untouched.
+const srOnlyStyle = {
+  position: 'absolute',
+  width: '1px',
+  height: '1px',
+  margin: '-1px',
+  padding: 0,
+  overflow: 'hidden',
+  clip: 'rect(0 0 0 0)',
+  clipPath: 'inset(50%)',
+  border: 0,
+  whiteSpace: 'nowrap',
+};
+
 const VisionPage = () => {
-  const { speak, cancelSpeech, suspendListening, resumeListening } = useVoice();
+  const { speak: speakRaw, cancelSpeech, suspendListening, resumeListening } = useVoice();
   const { mode } = useMode();
   const { agility, cuesEnabled } = useSettings();
-  
+
+  const [liveMessage, setLiveMessage] = useState('');
+
   const [isStreaming, setIsStreaming] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [currentDescription, setCurrentDescription] = useState('Camera not active');
@@ -75,6 +92,19 @@ const VisionPage = () => {
 
   const isSpeechMuted = () => Date.now() < speechMuteUntil.current;
   const muteSpeechFor = (ms) => { speechMuteUntil.current = Date.now() + ms; };
+
+  /**
+   * Every sentence we speak is also mirrored into the visually-hidden
+   * aria-live region rendered below, so a screen-reader user receives the same
+   * guidance as the TTS voice — including when TTS is muted, still loading, or
+   * routed to a braille display instead of audio.
+   */
+  const speak = (text, ...rest) => {
+    if (typeof text === 'string' && text.trim()) {
+      setLiveMessage(text.trim());
+    }
+    return speakRaw(text, ...rest);
+  };
 
   // --- Non-speech cues (earcon + vibration) ---------------------------------
   // The AudioContext is created lazily inside a user gesture (Start / Switch
@@ -545,18 +575,6 @@ const VisionPage = () => {
           speak(data.speech);
         }
 
-        // Handle wall alerts with 3-second cooldown (handled by backend)
-        if (data.wall_alert && !qaInProgress && !qaMode && !isSpeechMuted()) {
-          const wallMsg = data.wall_alert.message;
-          if (data.wall_alert.urgent) {
-            // Urgent wall alert - speak immediately and show toast
-            toast.error(wallMsg, { duration: 5000 });
-          } else {
-            // Regular wall alert
-            toast(wallMsg, { icon: '⚠️', duration: 3000 });
-          }
-        }
-
         // Update annotated image
         if (data.annotated_image) {
           setAnnotatedImage(`data:image/png;base64,${data.annotated_image}`);
@@ -700,7 +718,16 @@ const VisionPage = () => {
 
 
   return (
-    <div className="webcam-component">
+    <div className="webcam-component" role="region" aria-label="Live vision analysis">
+      {/*
+        Screen-reader mirror of the spoken guidance. Visually hidden, so the
+        layout is unchanged; assertive because hazard speech is time-critical
+        and must interrupt whatever the screen reader is currently reading.
+      */}
+      <div aria-live="assertive" aria-atomic="true" style={srOnlyStyle}>
+        {liveMessage}
+      </div>
+
       <div className="webcam-header">
         <h2>Real-time Vision Analysis 3.0</h2>
         <p>YOLOv8 + ByteTrack + Depth Anything + Florence-2</p>
@@ -719,11 +746,18 @@ const VisionPage = () => {
       </div>
 
       <div className="webcam-content">
-        <div className="video-section">
+        <div className="video-section" role="group" aria-label="Camera and controls">
           <div className="video-container">
             {/* Apply the mirrored class based on facingMode state */}
-            <video ref={videoRef} autoPlay playsInline muted className={videoClass} /> 
-            <canvas ref={canvasRef} style={{ display: 'none' }} />
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
+              muted
+              className={videoClass}
+              aria-label={isStreaming ? 'Live camera feed' : 'Camera feed, not active'}
+            />
+            <canvas ref={canvasRef} style={{ display: 'none' }} aria-hidden="true" />
             {!isStreaming && (
               <div className="video-placeholder">
                 <Camera className="placeholder-icon" size={48} />
@@ -737,16 +771,18 @@ const VisionPage = () => {
               {!isStreaming ? (
                 <motion.button 
                   whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
-                  onClick={startCamera} 
+                  onClick={startCamera}
                   className="control-button start-button"
+                  aria-label="Start camera and begin live guidance"
                 >
                   <Play size={20} /> Start Camera
                 </motion.button>
               ) : (
-                <motion.button 
+                <motion.button
                   whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
-                  onClick={() => stopCamera(false)} 
+                  onClick={() => stopCamera(false)}
                   className="control-button stop-button"
+                  aria-label="Stop camera and end live guidance"
                 >
                   <Square size={20} /> Stop Camera
                 </motion.button>
@@ -757,8 +793,9 @@ const VisionPage = () => {
             {hasMultipleCameras && (
                 <motion.button 
                     whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
-                    onClick={toggleCamera} 
+                    onClick={toggleCamera}
                     className="control-button switch-button"
+                    aria-label={`Switch to ${facingMode === 'user' ? 'rear' : 'front'} camera`}
                     title={`Switch to ${facingMode === 'user' ? 'Rear' : 'Front'} Camera`}
                 >
                     <RefreshCw size={20} /> 
@@ -768,9 +805,12 @@ const VisionPage = () => {
             
             <motion.button 
               whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
-              onClick={() => setQaMode(!qaMode)} 
+              onClick={() => setQaMode(!qaMode)}
               disabled={!isStreaming}
               className="control-button qa-button"
+              aria-label={qaMode ? 'Close the Ask AI panel' : 'Open the Ask AI panel to ask about the scene'}
+              aria-expanded={qaMode}
+              aria-controls="qa-panel"
               title="Toggle Ask AI panel"
             >
               <Mic size={20} /> {qaMode ? 'Close' : 'Ask AI'}
@@ -783,13 +823,21 @@ const VisionPage = () => {
               onClick={() => setShowCalibration(!showCalibration)}
               className="secondary-button calibrate-button"
               disabled={!isStreaming}
+              aria-label={isCalibrated ? 'Recalibrate distance estimation' : 'Calibrate distance estimation'}
+              aria-expanded={showCalibration}
+              aria-controls="calibration-panel"
             >
               <Zap size={18} /> {isCalibrated ? 'Recalibrate' : 'Calibrate'}
             </motion.button>
           </div>
 
           <div className="voice-select-wrapper control-block-select">
-            <select value={lang} onChange={(e) => setLang(e.target.value)} className="voice-select">
+            <select
+              value={lang}
+              onChange={(e) => setLang(e.target.value)}
+              className="voice-select"
+              aria-label="Guidance language"
+            >
               <option value="en">English</option>
               <option value="hi">Hindi</option>
               <option value="mr">Marathi</option>
@@ -802,6 +850,9 @@ const VisionPage = () => {
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               className="calibration-panel"
+              id="calibration-panel"
+              role="group"
+              aria-label="Distance calibration"
             >
               <h4>Distance Calibration</h4>
               <p>Enter the real-world distance to the object in your camera view (in meters)</p>
@@ -813,31 +864,39 @@ const VisionPage = () => {
                 step="0.1"
                 min="0.1"
                 className="calibration-input"
+                aria-label="Distance to the object, in meters"
               />
               <motion.button
                 whileHover={{ scale: 1.02 }}
                 whileTap={{ scale: 0.98 }}
                 onClick={handleCalibrate}
                 className="calibration-submit-button"
+                aria-label="Submit calibration distance"
               >
                 Calibrate
               </motion.button>
             </motion.div>
           )}
 
-          {/* Q&A Panel - Always Visible */}
+          {/* Q&A Panel - Always mounted; faded out and inert while closed, so a
+              screen reader neither announces nor tab-stops in a hidden panel. */}
           <motion.div
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: qaMode ? 1 : 0, y: qaMode ? 0 : 10 }}
             transition={{ duration: 0.2 }}
             className="qa-panel"
+            id="qa-panel"
+            role="group"
+            aria-label="Ask AI about the scene"
+            inert={!qaMode}
             style={{ pointerEvents: qaMode ? 'auto' : 'none' }}
           >
             <div className="qa-panel-header">
               <h4>Ask AI About the Scene</h4>
-              <button 
-                onClick={() => setQaMode(false)} 
+              <button
+                onClick={() => setQaMode(false)}
                 className="qa-close-button"
+                aria-label="Close the Ask AI panel"
                 title="Close Q&A panel"
               >
                 <X size={20} />
@@ -850,9 +909,10 @@ const VisionPage = () => {
               onChange={(e) => setQaQuestion(e.target.value)}
               onKeyPress={(e) => e.key === 'Enter' && handleQA()}
               className="qa-input"
+              aria-label="Your question about the scene"
               autoFocus={qaMode}
             />
-            <button onClick={handleQA} className="qa-submit-button">
+            <button onClick={handleQA} className="qa-submit-button" aria-label="Send question and get answer">
               Get Answer
             </button>
             {qaAnswer && (
@@ -863,10 +923,14 @@ const VisionPage = () => {
           </motion.div>
         </div>
 
-        <div className="analysis-section">
+        <div className="analysis-section" role="region" aria-label="Scene analysis results">
           {annotatedImage && (
             <div className="annotated-image-container">
-              <img src={annotatedImage} alt="AI Vision" className="annotated-image" />
+              <img
+                src={annotatedImage}
+                alt="Camera view with detected objects outlined"
+                className="annotated-image"
+              />
             </div>
           )}
           
@@ -893,7 +957,7 @@ const VisionPage = () => {
           </div>
           
           {error && (
-            <div className="error-card">
+            <div className="error-card" role="alert">
               <AlertCircle size={20} />
               <p>{error}</p>
             </div>

@@ -49,7 +49,6 @@ from engine import priority as eng_priority
 from engine import narrate as eng_narrate
 from engine import path as eng_path
 from engine import vlm as eng_vlm
-from engine import ocr as eng_ocr
 from engine import telemetry as eng_telemetry
 from engine import dialogue as eng_dialogue
 
@@ -101,7 +100,7 @@ print("[INIT] Loading Florence-2...")
 try:
     eng_vlm.load_vlm(device=device)
 except Exception as e:
-    print(f"[WARNING] Florence-2 failed to load: {e}. /query describe|find will be degraded.")
+    print(f"[WARNING] Florence-2 failed to load: {e}. /question describe|find will be degraded.")
 
 # EasyOCR readers are LAZY (loaded on first OCR request) so startup VRAM stays low.
 # The periodic loop never touches OCR.
@@ -225,46 +224,6 @@ def simple_detection_facts(frame, frame_ts=None):
     detections = eng_motion.update_motion(detections, w, now_ts=frame_ts)
     return detections, depth_map
 
-
-def scan_terrain_hazards(depth_map):
-    """
-    Run overhead + drop-off + staircase detectors on an already-computed
-    depth map.
-
-    Returns:
-        {
-          "overhead":   <analyze_overhead result or None>,
-          "dropoff":    <detect_dropoff result or None>,
-          "staircase":  <detect_staircase result or None>,
-          "speech":     "<hazard sentence(s), highest urgency first>" or ""
-        }
-
-    Only CONFIRMED hazards produce speech (all three detectors self-debounce
-    over consecutive frames), so this will not chatter on a single noisy
-    frame. Drop-off is spoken first (a fall is the higher consequence),
-    then staircase, then overhead.
-    """
-    overhead = eng_path.analyze_overhead(depth_map)
-    dropoff = eng_path.detect_dropoff(depth_map)
-    staircase = eng_path.detect_staircase(depth_map)
-
-    parts = []
-    do_msg = eng_narrate.narrate_dropoff(dropoff)
-    st_msg = eng_narrate.narrate_staircase(staircase)
-    oh_msg = eng_narrate.narrate_overhead(overhead)
-    if do_msg:
-        parts.append(do_msg)
-    if st_msg:
-        parts.append(st_msg)
-    if oh_msg:
-        parts.append(oh_msg)
-
-    return {
-        "overhead": overhead if overhead.get("detected") else None,
-        "dropoff": dropoff if dropoff.get("detected") else None,
-        "staircase": staircase if staircase.get("detected") else None,
-        "speech": " ".join(parts),
-    }
 
 def qa_from_detections(question, detections):
     """Rule-based fallback Q&A over detection facts (no model call)."""
@@ -402,7 +361,7 @@ def locate_target_result(
 
 
 def locate_target(frame, target):
-    """Backward-compatible speech-only wrapper used by the /query endpoint."""
+    """Backward-compatible speech-only wrapper around locate_target_result()."""
     return locate_target_result(frame, target, possessive=True)["speech"]
 
 
@@ -706,8 +665,8 @@ def analyze_frame():
         staircase_speech = eng_narrate.narrate_staircase(staircase_result)
         # ------------------------------------------------------------------
         # Structured alert list for Tier-2 frontend consumption.
-        # Drop-off is CRITICAL, overhead is HIGH.
-        # Both are always included so the frontend can render all hazards.
+        # Drop-off is CRITICAL; staircase and overhead are HIGH.
+        # All three are always included so the frontend can render every hazard.
         # ------------------------------------------------------------------
 
         alerts = []
@@ -741,7 +700,7 @@ def analyze_frame():
 
         # ------------------------------------------------------------------
         # Safety speech priority policy:
-        #   drop-off (critical) > overhead (high) > path/objects
+        #   drop-off (critical) > staircase (high) > overhead (high) > path/objects
         #
         # Only the single highest-priority structural event enters the
         # spoken channel to avoid auditory overload at the worst moments.
@@ -852,46 +811,6 @@ def analyze_frame():
         import traceback
         traceback.print_exc()
         print(f"[analyze_frame] {e}")
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route('/query', methods=['POST'])
-def query():
-    """
-    On-demand voice Q&A.
-
-    Body (multipart/form-data):
-        frame  : image file
-        intent : 'describe' | 'find' | 'read'
-        target : object name (for 'find'), e.g. 'water bottle'
-    """
-    try:
-        if 'frame' not in request.files:
-            return jsonify({"error": "No frame provided"}), 400
-        file = request.files['frame']
-        intent = request.form.get('intent', 'describe')
-
-        file_bytes = np.frombuffer(file.read(), np.uint8)
-        frame = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-        if frame is None:
-            return jsonify({"error": "Invalid image"}), 400
-        if intent == 'read':
-            text = eng_ocr.read_text(frame, min_conf=0.25, detail=0)
-            return jsonify({"speech": eng_narrate.narrate_read(text), "text": text})
-
-        if intent == 'find':
-            target = request.form.get('target', 'object')
-            speech = locate_target(frame, target)
-            return jsonify({"speech": speech})
-
-        # describe
-        speech = eng_vlm.describe_scene(frame)
-        return jsonify({"speech": speech})
-
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        print(f"[query] {e}")
         return jsonify({"error": str(e)}), 500
 
 

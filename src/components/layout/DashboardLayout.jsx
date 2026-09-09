@@ -65,6 +65,10 @@ const DashboardLayout = () => {
           {/* Priority / Naive mode toggle */}
           <button
             onClick={toggleMode}
+            aria-pressed={mode === 'priority'}
+            aria-label={mode === 'priority'
+              ? 'Priority mode: only actionable hazards are announced. Activate for Naive mode.'
+              : 'Naive mode: all detected objects are announced. Activate for Priority mode.'}
             title={mode === 'priority'
               ? 'Priority mode active: only actionable hazards are announced. Click for Naive.'
               : 'Naive mode active: all detected objects are announced. Click for Priority.'}

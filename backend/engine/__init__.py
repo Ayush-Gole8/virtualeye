@@ -14,4 +14,5 @@ Modules:
     ocr       - on-demand EasyOCR 'read this' text recognition (en/hi/mr)
     telemetry - JSONL per-frame logging for the naive-vs-priority user study
     vlm       - Florence-2 for scene Q&A and open-vocabulary object finding
+    dialogue  - conversational NLU + short-lived session memory for voice Q&A
 """
