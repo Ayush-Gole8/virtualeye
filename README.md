@@ -66,6 +66,66 @@ Then open your browser to `http://localhost:5173`
 
 ---
 
+## Running on Mobile (Phone)
+
+Use your phone as the camera, mic, and speaker while the laptop does all AI inference.
+
+### Prerequisites
+- Phone and laptop on the same network (use phone hotspot for best results)
+- [ngrok](https://ngrok.com) installed and authenticated
+- Backend running on the laptop
+
+### Steps (repeat every session)
+
+**1. Connect laptop to your phone's hotspot**
+
+**2. Find your laptop's IP**
+```powershell
+ipconfig
+```
+Look for `IPv4 Address` under `Wireless LAN adapter Wi-Fi` (e.g. `172.16.242.31`)
+
+**3. Update `.env.local` in project root with the current IP**
+```
+VITE_API_URL=http://<your-laptop-ip>:5000
+```
+
+**4. Start the backend**
+```powershell
+cd backend
+.\venv\Scripts\activate
+python server.py
+```
+
+**5. Start the frontend**
+```powershell
+npm run dev -- --host
+```
+
+**6. Start ngrok tunnel (gives HTTPS required for camera access on Android)**
+```powershell
+ngrok http 5173
+```
+Copy the `https://xxxx.ngrok-free.app` URL it shows.
+
+**7. Update `vite.config.js` with the new ngrok host**
+```js
+allowedHosts: ['xxxx.ngrok-free.app'],
+```
+
+**8. Open on your phone browser**
+```
+https://xxxx.ngrok-free.app
+```
+
+### Notes
+- ngrok URL changes every session on the free plan — update `vite.config.js` each time
+- Camera and microphone permissions will be requested on first visit
+- Voice commands require Android Chrome (Safari on iOS is not supported)
+- For speech recognition to work on Android Chrome, either use ngrok (HTTPS) or enable the flag at `chrome://flags/#unsafely-treat-insecure-origin-as-secure`
+
+---
+
 ## System Requirements
 
 ### Minimum
