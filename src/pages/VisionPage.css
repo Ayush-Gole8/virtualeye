@@ -12,12 +12,14 @@
 .webcam-header h2 {
   font-size: 1.8rem;
   font-weight: 700;
-  color: var(--text-main); /* Using global theme variable */
+  color: var(--text-main);
+  /* Using global theme variable */
   margin-bottom: 0.5rem;
 }
 
 .webcam-header p {
-  color: var(--text-sub); /* Using global theme variable */
+  color: var(--text-sub);
+  /* Using global theme variable */
   font-size: 1rem;
 }
 
@@ -47,11 +49,14 @@
 }
 
 @keyframes video-pulse {
-  0%, 100% { 
+
+  0%,
+  100% {
     border-color: rgba(59, 130, 246, 0.3);
     box-shadow: 0 8px 32px rgba(59, 130, 246, 0.2);
   }
-  50% { 
+
+  50% {
     border-color: rgba(59, 130, 246, 0.6);
     box-shadow: 0 12px 40px rgba(59, 130, 246, 0.3);
   }
@@ -61,12 +66,16 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
-  transform: scaleX(-1); /* Mirror the video feed */
+  transform: scaleX(-1);
+  /* Mirror the video feed */
 }
 
 .video-placeholder {
   position: absolute;
-  top: 0; left: 0; right: 0; bottom: 0;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -116,6 +125,7 @@
   background: linear-gradient(135deg, #7c3aed, #6d28d9);
   box-shadow: 0 4px 14px rgba(59, 130, 246, 0.3);
 }
+
 .start-button:hover {
   background: linear-gradient(135deg, #6d28d9, #5b21b6);
   box-shadow: 0 6px 20px rgba(108, 70, 170, 0.35);
@@ -125,6 +135,7 @@
   background: linear-gradient(135deg, #ef4444, #dc2626);
   box-shadow: 0 4px 14px rgba(239, 68, 68, 0.3);
 }
+
 .stop-button:hover {
   background: linear-gradient(135deg, #dc2626, #b91c1c);
   box-shadow: 0 6px 20px rgba(239, 68, 68, 0.4);
@@ -132,11 +143,13 @@
 
 .audio-button {
   background: linear-gradient(135deg, #10b981, #059669);
-  box-shadow: 0 4px 14px rgba(16,185,129,0.18);
+  box-shadow: 0 4px 14px rgba(16, 185, 129, 0.18);
 }
+
 .audio-button:hover {
   transform: translateY(-2px);
 }
+
 .audio-button:disabled {
   opacity: 0.6;
   cursor: not-allowed;
@@ -210,7 +223,7 @@
   background: white;
   border-radius: 99px;
   border: 1px solid #d1fae5;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
 }
 
 .detection-icon {
@@ -263,6 +276,7 @@
   .webcam-content {
     grid-template-columns: 1fr;
   }
+
   .video-container {
     aspect-ratio: 16/9;
   }
@@ -783,8 +797,91 @@
 
 /* Optional: Style the new switch button */
 .control-button.switch-button {
-    background-color: #3f51b5; /* Example: Indigo color */
-    color: white;
-    border: none;
-    /* Add any other consistent styling */
+  background-color: #3f51b5;
+  /* Example: Indigo color */
+  color: white;
+  border: none;
+  /* Add any other consistent styling */
+}
+
+/* ===== MOBILE RESPONSIVE ===== */
+@media (max-width: 768px) {
+  .webcam-content {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+
+  .webcam-header h2 {
+    font-size: 1.3rem;
+  }
+
+  .webcam-header p {
+    font-size: 0.85rem;
+  }
+
+  .video-container {
+    aspect-ratio: 4/3;
+  }
+
+  .video-controls {
+    gap: 0.5rem;
+  }
+
+  .control-button {
+    padding: 0.6rem 1rem;
+    font-size: 0.9rem;
+    min-width: 120px;
+  }
+
+  .control-buttons-row {
+    gap: 0.5rem;
+  }
+
+  .secondary-button {
+    padding: 0.5rem 0.9rem;
+    font-size: 0.85rem;
+  }
+
+  .voice-select {
+    min-width: 150px;
+    font-size: 0.9rem;
+  }
+
+  .detection-item {
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    padding: 0.6rem 0.75rem;
+  }
+
+  .detection-class {
+    font-size: 0.9rem;
+  }
+
+  .detection-side,
+  .detection-distance,
+  .detection-confidence {
+    font-size: 0.75rem;
+    padding: 0.15rem 0.5rem;
+  }
+
+  .qa-panel,
+  .calibration-panel {
+    padding: 1rem;
+  }
+
+  .description-text {
+    font-size: 0.95rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .video-controls {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .control-button {
+    min-width: unset;
+    width: 100%;
+  }
 }
