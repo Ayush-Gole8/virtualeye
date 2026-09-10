@@ -11,19 +11,19 @@ const ROUTE_NAMES = {
   '/dashboard/settings': 'Settings page. You can adjust application preferences here.',
   '/dashboard/demopurpose': 'Demo section. Explore sample features here.',
   '/dashboard': 'Dashboard. You can say "vision" for live vision, "read" for text recognition, or "chat" for voice assistant.',
-  '/': 'Exiting application. Goodbye!'
+  '/': 'Hey there, welcome to virtual eye, press on screen to start communicating'
 };
 
 export const VoiceProvider = ({ children }) => {
   const [isListening, setIsListening] = useState(false);
   const [lastCommand, setLastCommand] = useState('');
-  
+
   const navigate = useNavigate();
   const location = useLocation();
   const locationRef = useRef(location);
-  
+
   const recognitionRef = useRef(null);
-  const isListeningRef = useRef(isListening); 
+  const isListeningRef = useRef(isListening);
   const processingRef = useRef(false);
   const isSpeakingRef = useRef(false);          // true while TTS audio is playing
   const isRecognitionRunningRef = useRef(false); // true only when SpeechRecognition is actively running
@@ -40,9 +40,9 @@ export const VoiceProvider = ({ children }) => {
     const loadVoices = () => {
       const voices = window.speechSynthesis.getVoices();
       if (voices.length > 0) {
-        const preferredVoice = voices.find(v => v.name.includes('Google US English')) || 
-                               voices.find(v => v.name.includes('Zira')) || 
-                               voices.find(v => v.lang.startsWith('en'));
+        const preferredVoice = voices.find(v => v.name.includes('Google US English')) ||
+          voices.find(v => v.name.includes('Zira')) ||
+          voices.find(v => v.lang.startsWith('en'));
         if (preferredVoice) setVoice(preferredVoice);
       }
     };
@@ -61,7 +61,7 @@ export const VoiceProvider = ({ children }) => {
     if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
       const recognition = new SpeechRecognition();
-      
+
       recognition.continuous = true;
       recognition.interimResults = false;
       recognition.lang = 'en-US';
@@ -75,7 +75,7 @@ export const VoiceProvider = ({ children }) => {
       recognition.onend = () => {
         isRecognitionRunningRef.current = false;
         if (isListeningRef.current && !isSpeakingRef.current && !recognitionSuspendedRef.current) {
-          try { recognition.start(); } catch (e) {}
+          try { recognition.start(); } catch (e) { }
         } else if (!isListeningRef.current) {
           setIsListening(false);
         }
@@ -85,12 +85,12 @@ export const VoiceProvider = ({ children }) => {
         isListeningRef.current = false;
         setIsListening(false);
       };
-      
+
       recognition.onresult = (event) => {
         const transcript = event.results[event.resultIndex][0].transcript.toLowerCase().trim();
         console.log("Heard:", transcript);
         setLastCommand(transcript);
-        
+
         // Skip if TTS is currently playing OR we're still in command-lock cooldown
         if (!processingRef.current && !isSpeakingRef.current) {
           processingRef.current = true;
@@ -101,7 +101,7 @@ export const VoiceProvider = ({ children }) => {
           console.debug('Ignored during speech cooldown:', transcript);
         }
       };
-      
+
       recognitionRef.current = recognition;
     }
     return () => { if (recognitionRef.current) recognitionRef.current.stop(); };
@@ -126,7 +126,7 @@ export const VoiceProvider = ({ children }) => {
       'what is to my left', 'what is to my right', 'what is in front',
     ];
     const isVisualPresenceQuestion = /^is (?:my|the|a|an) .+ (?:here|visible|in view)$/.test(cmd);
-    
+
     // Function to stop camera with proper event dispatching
     const stopCamera = () => {
       console.log('Stopping camera...');
@@ -172,9 +172,9 @@ export const VoiceProvider = ({ children }) => {
     }
 
     // 2. CAMERA SWITCHING COMMANDS - Handle camera switching
-    if (matches(['switch camera', 'change camera', 'front camera', 'back camera', 'rear camera', 'flip camera', 
-                'switch to front', 'switch to back', 'switch to rear', 'change to front', 'change to back',
-                'toggle camera', 'other camera', 'next camera'])) {
+    if (matches(['switch camera', 'change camera', 'front camera', 'back camera', 'rear camera', 'flip camera',
+      'switch to front', 'switch to back', 'switch to rear', 'change to front', 'change to back',
+      'toggle camera', 'other camera', 'next camera'])) {
       if (currentPath.includes('vision')) {
         switchCamera();
       } else {
@@ -184,17 +184,17 @@ export const VoiceProvider = ({ children }) => {
     }
 
     // 3. STOP COMMANDS - Handle all stop-related commands first
-    if (matches(['stop', 'stop camera', 'turn off camera', 'shut down camera', 'end camera', 'close camera', 
-                'stop vision', 'turn off vision', 'stop seeing', 'stop looking', 'stop scanning',
-                'that\'s enough', 'enough', 'all done', 'i\'m done', 'finish', 'end session',
-                'turn it off', 'shut it down', 'stop that', 'stop now'])) {
+    if (matches(['stop', 'stop camera', 'turn off camera', 'shut down camera', 'end camera', 'close camera',
+      'stop vision', 'turn off vision', 'stop seeing', 'stop looking', 'stop scanning',
+      'that\'s enough', 'enough', 'all done', 'i\'m done', 'finish', 'end session',
+      'turn it off', 'shut it down', 'stop that', 'stop now'])) {
       stopCamera();
       return;
     }
 
     // 3. CAMERA START COMMANDS
     if (matches(['start camera', 'turn on camera', 'begin vision', 'start vision',
-                'start seeing', 'begin seeing', 'open camera', 'activate camera'])) {
+      'start seeing', 'begin seeing', 'open camera', 'activate camera'])) {
       if (currentPath.includes('vision')) {
         window.dispatchEvent(new CustomEvent('voice-start-camera'));
       } else {
@@ -223,10 +223,10 @@ export const VoiceProvider = ({ children }) => {
     }
     // SCENE QUESTIONS — handled inline via Vision backend, no navigation
     else if (matches(['chat', 'voice chat', 'talk', 'assistant', 'ai', 'ask ai', 'ask question', 'i have a question', 'i need help', 'can you help', 'help me',
-                    'talk to assistant', 'start chat', 'open chat', 'chat with ai', 'ask something', 'i want to ask', 'can i ask', 'hey assistant',
-                    'virtual assistant', 'virtual eye', 'hey virtual eye', 'okay virtual eye', 'hello assistant', 'hey ai', 'okay ai', 'hello ai',
-                    'i need information', 'tell me about', 'i want to know', 'can you tell me'])) {
-      
+      'talk to assistant', 'start chat', 'open chat', 'chat with ai', 'ask something', 'i want to ask', 'can i ask', 'hey assistant',
+      'virtual assistant', 'virtual eye', 'hey virtual eye', 'okay virtual eye', 'hello assistant', 'hey ai', 'okay ai', 'hello ai',
+      'i need information', 'tell me about', 'i want to know', 'can you tell me'])) {
+
       if (!currentPath.includes('chat')) {
         speak("Opening Chat. How can I assist you today?");
         navigate('/dashboard/chat');
@@ -266,14 +266,14 @@ export const VoiceProvider = ({ children }) => {
         speak("I'll keep the application running. What would you like to do next?");
       }
     }
-    
+
     // 11. EMERGENCY COMMANDS
     else if (matches(['sos', 'help', 'emergency', 'urgent', 'call for help'])) {
       speak("Emergency alert triggered! Sending your location to emergency contacts.");
       toast.error("EMERGENCY ALERT: Your location has been shared with emergency contacts!");
       // Additional emergency actions can be added here
     }
-    
+
     // 12. GENERAL CONVERSATION
     else if (matches(['thank you', 'thanks', 'that\'s all', 'that is all', 'i\'m done'])) {
       speak("You're welcome! Is there anything else I can help you with?");
@@ -282,11 +282,11 @@ export const VoiceProvider = ({ children }) => {
       speak("I am your Virtual Eye assistant, here to help you navigate and understand your surroundings. I can describe what I see, read text, and answer your questions.");
     }
     else if (matches(['what time is it', 'current time', 'what\'s the time'])) {
-      const time = new Date().toLocaleTimeString('en-US', {hour: '2-digit', minute:'2-digit'});
+      const time = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
       speak(`The current time is ${time}`);
     }
     else if (matches(['what day is it', 'what\'s today', 'current date'])) {
-      const date = new Date().toLocaleDateString('en-US', {weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'});
+      const date = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
       speak(`Today is ${date}`);
     }
   };
@@ -301,7 +301,7 @@ export const VoiceProvider = ({ children }) => {
     } else {
       isListeningRef.current = true;
       recognitionSuspendedRef.current = false;
-      try { recognitionRef.current.start(); speak("I am listening."); } catch(e) {}
+      try { recognitionRef.current.start(); speak("I am listening."); } catch (e) { }
       setIsListening(true);
     }
   };
@@ -314,7 +314,7 @@ export const VoiceProvider = ({ children }) => {
 
     if (isListeningRef.current && !recognitionSuspendedRef.current && !isRecognitionRunningRef.current) {
       setTimeout(() => {
-        try { recognitionRef.current?.start(); } catch (e) {}
+        try { recognitionRef.current?.start(); } catch (e) { }
       }, 150);
     }
   };
@@ -322,7 +322,7 @@ export const VoiceProvider = ({ children }) => {
   const suspendListening = () => {
     recognitionSuspendedRef.current = true;
     if (isRecognitionRunningRef.current) {
-      try { recognitionRef.current?.stop(); } catch (e) {}
+      try { recognitionRef.current?.stop(); } catch (e) { }
     }
   };
 
@@ -336,7 +336,7 @@ export const VoiceProvider = ({ children }) => {
           || isSpeakingRef.current
           || isRecognitionRunningRef.current
         ) return;
-        try { recognitionRef.current?.start(); } catch (e) {}
+        try { recognitionRef.current?.start(); } catch (e) { }
       }, 150);
     }
   };
@@ -355,7 +355,7 @@ export const VoiceProvider = ({ children }) => {
 
     // Only stop recognition if it's actually running — avoids spurious onend/restart cycles
     if (isRecognitionRunningRef.current) {
-      try { recognitionRef.current.stop(); } catch (e) {}
+      try { recognitionRef.current.stop(); } catch (e) { }
     }
 
     const selectedVoice = voice ||
@@ -385,7 +385,7 @@ export const VoiceProvider = ({ children }) => {
       ) {
         setTimeout(() => {
           if (speechToken !== speechTokenRef.current) return;
-          try { recognitionRef.current.start(); } catch (e) {}
+          try { recognitionRef.current.start(); } catch (e) { }
         }, 600); // 600ms gap lets echo fully fade
       }
     };
