@@ -38,9 +38,6 @@ try:
 except Exception:
     pyttsx3 = None
 
-# EasyOCR is still used directly by the /ocr, /ocr_url, /ocr_pdf endpoints
-import easyocr
-
 # ---- Perception engine (UI-free modules) --------------------------------------
 from engine import depth as eng_depth
 from engine import motion as eng_motion
@@ -51,10 +48,11 @@ from engine import path as eng_path
 from engine import vlm as eng_vlm
 from engine import telemetry as eng_telemetry
 from engine import dialogue as eng_dialogue
+from engine import ocr as eng_ocr
 
 
 # ============== CONFIG ==============
-MODEL_WEIGHTS = "yolov8n.pt"
+MODEL_WEIGHTS = "yolo11m.pt"
 CONF_THRESH = 0.35
 LEFT_FRAC = 0.33
 RIGHT_FRAC = 0.66
@@ -102,9 +100,8 @@ try:
 except Exception as e:
     print(f"[WARNING] Florence-2 failed to load: {e}. /question describe|find will be degraded.")
 
-# EasyOCR readers are LAZY (loaded on first OCR request) so startup VRAM stays low.
-# The periodic loop never touches OCR.
-ocr_readers = {}
+# OCR is handled by engine.ocr (readers are lazy + cached per language set), so
+# startup VRAM stays low and the periodic narration loop never touches OCR.
 
 # Optional server-side TTS
 tts = None
@@ -146,21 +143,6 @@ def choose_side(cx, w):
 def encode_image_base64(image_array):
     _, buffer = cv2.imencode('.jpg', image_array)
     return base64.b64encode(buffer).decode('utf-8')
-
-
-def get_ocr_reader(langs):
-    """Lazy-load + cache an EasyOCR reader for the requested language list."""
-    key = tuple(langs)
-    if key in ocr_readers:
-        return ocr_readers[key]
-    try:
-        reader = easyocr.Reader(langs, gpu=torch.cuda.is_available(), verbose=False)
-        ocr_readers[key] = reader
-        print(f"[OCR] Loaded reader for {langs}")
-        return reader
-    except Exception as e:
-        print(f"[OCR] Failed to load reader for {langs}: {e}")
-        return None
 
 
 def speak(text):
@@ -898,23 +880,15 @@ def ocr():
         file = request.files['frame']
         langs = [s.strip() for s in request.form.get("langs", "").split(",") if s.strip()] or OCR_LANG_DEFAULT
         langs = langs[:3]
-        reader = get_ocr_reader(langs)
-        if reader is None:
-            return jsonify({"error": f"OCR unavailable for {langs}"}), 503
+        verify = request.form.get("verify", "1") not in ("0", "false", "False", "")
         file_bytes = np.frombuffer(file.read(), np.uint8)
         frame = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
         if frame is None:
             return jsonify({"error": "Invalid image"}), 400
-        max_side = max(frame.shape[:2])
-        if max_side > 1280:
-            scale = 1280 / max_side
-            frame = cv2.resize(frame, (int(frame.shape[1] * scale), int(frame.shape[0] * scale)))
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        gray = cv2.medianBlur(cv2.equalizeHist(gray), 3)
-        results = reader.readtext(gray)
-        lines = [r[1] for r in results if r and len(r) >= 2]
-        return jsonify({"success": True, "text": "\n".join(lines).strip(),
-                        "line_count": len(lines), "languages": langs})
+        res = eng_ocr.recognize(frame, langs=langs, verify=verify)
+        return jsonify({"success": True, "text": res["text"],
+                        "line_count": res["line_count"], "mean_conf": res["mean_conf"],
+                        "languages": res["languages"]})
     except Exception as e:
         print(f"[ocr] {e}")
         return jsonify({"error": str(e)}), 500
@@ -928,9 +902,7 @@ def ocr_url():
         image_url = request.form['url']
         langs = [s.strip() for s in request.form.get("langs", "").split(",") if s.strip()] or OCR_LANG_DEFAULT
         langs = langs[:3]
-        reader = get_ocr_reader(langs)
-        if reader is None:
-            return jsonify({"error": f"OCR unavailable for {langs}"}), 503
+        verify = request.form.get("verify", "1") not in ("0", "false", "False", "")
         headers = {'User-Agent': 'Mozilla/5.0'}
         resp = requests.get(image_url, timeout=15, stream=True, headers=headers, allow_redirects=True)
         resp.raise_for_status()
@@ -938,16 +910,10 @@ def ocr_url():
         frame = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
         if frame is None:
             return jsonify({"error": "Could not decode image from URL"}), 400
-        max_side = max(frame.shape[:2])
-        if max_side > 1280:
-            scale = 1280 / max_side
-            frame = cv2.resize(frame, (int(frame.shape[1] * scale), int(frame.shape[0] * scale)))
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        gray = cv2.medianBlur(cv2.equalizeHist(gray), 3)
-        results = reader.readtext(gray)
-        lines = [r[1] for r in results if r and len(r) >= 2]
-        return jsonify({"success": True, "text": "\n".join(lines).strip(),
-                        "line_count": len(lines), "languages": langs})
+        res = eng_ocr.recognize(frame, langs=langs, verify=verify)
+        return jsonify({"success": True, "text": res["text"],
+                        "line_count": res["line_count"], "mean_conf": res["mean_conf"],
+                        "languages": res["languages"]})
     except requests.exceptions.RequestException as e:
         return jsonify({"error": f"Failed to fetch image: {e}"}), 400
     except Exception as e:
@@ -963,9 +929,7 @@ def ocr_pdf():
         pdf_file = request.files['pdf']
         langs = [s.strip() for s in request.form.get("langs", "").split(",") if s.strip()] or OCR_LANG_DEFAULT
         langs = langs[:3]
-        reader = get_ocr_reader(langs)
-        if reader is None:
-            return jsonify({"error": f"OCR unavailable for {langs}"}), 503
+        verify = request.form.get("verify", "0") not in ("0", "false", "False", "")
         pdf_bytes = pdf_file.read()
         try:
             from pdf2image import convert_from_bytes
@@ -973,12 +937,9 @@ def ocr_pdf():
             all_text = []
             for i, img in enumerate(images):
                 frame = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                gray = cv2.medianBlur(cv2.equalizeHist(gray), 3)
-                results = reader.readtext(gray)
-                page_text = [r[1] for r in results if r and len(r) >= 2]
-                if page_text:
-                    all_text.append(f"--- Page {i+1} ---\n" + "\n".join(page_text))
+                res = eng_ocr.recognize(frame, langs=langs, verify=verify)
+                if res["text"]:
+                    all_text.append(f"--- Page {i+1} ---\n" + res["text"])
             return jsonify({"success": True, "text": "\n\n".join(all_text).strip(),
                             "pages_processed": len(images), "languages": langs})
         except ImportError:
