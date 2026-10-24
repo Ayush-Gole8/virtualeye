@@ -1038,5 +1038,6 @@ def reset_session():
 if __name__ == '__main__':
     K_DEFAULT = load_calib_K()
     print(f"[INIT] Legacy K = {K_DEFAULT} (distance now from depth map)")
-    print("\n[SERVER] http://localhost:5000")
-    app.run(debug=True, host='0.0.0.0', port=5000, use_reloader=False)
+    port = int(os.environ.get("PORT", 5000))
+    print(f"\n[SERVER] http://localhost:{port}")
+    app.run(debug=False, host='0.0.0.0', port=port, use_reloader=False)
