@@ -21,7 +21,7 @@ const getFetchOptions = (options = {}) => {
       ...options.headers,
     },
   };
-}; 
+};
 
 // Visually hidden, but still announced by screen readers. Absolutely positioned
 // and 1px, so adding it anywhere leaves the visual layout untouched.
@@ -60,12 +60,13 @@ const VisionPage = () => {
   const [qaQuestion, setQaQuestion] = useState('');
   const [qaAnswer, setQaAnswer] = useState('');
   const [qaInProgress, setQaInProgress] = useState(false);
-  
+
   // New state for camera selection: 'user' (front) or 'environment' (rear)
-  const [facingMode, setFacingMode] = useState('user'); 
+  const [facingMode, setFacingMode] = useState('user');
   const [hasMultipleCameras, setHasMultipleCameras] = useState(false); // New state to check for multiple cameras
 
   const videoRef = useRef(null);
+  const switchCameraButtonRef = useRef(null);
   const streamRef = useRef(null);
   const intervalRef = useRef(null);
   const canvasRef = useRef(null);
@@ -117,7 +118,7 @@ const VisionPage = () => {
         audioCtxRef.current = new AudioCtor();
       }
       if (audioCtxRef.current.state === 'suspended') {
-        audioCtxRef.current.resume().catch(() => {});
+        audioCtxRef.current.resume().catch(() => { });
       }
       return audioCtxRef.current;
     } catch (err) {
@@ -131,7 +132,7 @@ const VisionPage = () => {
     audioCtxRef.current = null;
     lastCueRef.current = { sig: null, rank: 0, ts: 0 };
     if (ctx && ctx.state !== 'closed') {
-      ctx.close().catch(() => {});
+      ctx.close().catch(() => { });
     }
   };
 
@@ -206,7 +207,7 @@ const VisionPage = () => {
           }
           return;
         }
-        
+
         const res = await fetch(`${API_BASE_URL}/get_calib_K`, getFetchOptions());
         const data = await res.json();
         if (data.K) {
@@ -243,28 +244,32 @@ const VisionPage = () => {
   // Listen for voice commands (omitted for brevity, assume the cleanup/setup logic is in place)
   useEffect(() => {
     const handleVoiceStart = () => {
-        if (!streamRef.current) {
-            startCamera();
-        }
+      if (!streamRef.current) {
+        startCamera();
+      }
     };
 
     const handleVoiceStop = () => stopCamera();
-    const handleVoiceSwitch = () => toggleCamera();
-    
+    const handleVoiceSwitch = () => {
+      if (switchCameraButtonRef.current) {
+        switchCameraButtonRef.current.click();
+      }
+    };
+
     const handleVoiceCapture = () => {
-        if (!streamRef.current) {
-            startCamera();
-        }
+      if (!streamRef.current) {
+        startCamera();
+      }
     };
 
     const handleVoiceCalibration = () => {
-        setShowCalibration(true);
-        speak("Calibration mode. Please enter the distance to the object in meters.");
+      setShowCalibration(true);
+      speak("Calibration mode. Please enter the distance to the object in meters.");
     };
 
     const handleVoiceQA = () => {
-        setQaMode(true);
-        speak("Q&A mode activated. Please ask a question about the scene.");
+      setQaMode(true);
+      speak("Q&A mode activated. Please ask a question about the scene.");
     };
 
     window.addEventListener('voice-start-camera', handleVoiceStart);
@@ -330,10 +335,10 @@ const VisionPage = () => {
     // Cleanup
     return () => {
       if (streamRef.current) {
-         // speak("Camera stopped."); // Removed because it clashes with stopCamera(true) below
-         stopCamera(true); // Stop camera on unmount/re-effect
+        // speak("Camera stopped."); // Removed because it clashes with stopCamera(true) below
+        stopCamera(true); // Stop camera on unmount/re-effect
       } else {
-         stopCamera(true);
+        stopCamera(true);
       }
       window.removeEventListener('voice-start-camera', handleVoiceStart);
       window.removeEventListener('voice-stop-camera', handleVoiceStop);
@@ -354,8 +359,8 @@ const VisionPage = () => {
       ensureAudioContext(); // user gesture — only safe place to open the audio context
       // Use the current facingMode in the constraints
       const constraints = {
-        video: { 
-          width: { ideal: 640 }, 
+        video: {
+          width: { ideal: 640 },
           height: { ideal: 480 },
           facingMode: requestedFacingMode
         },
@@ -364,7 +369,7 @@ const VisionPage = () => {
 
       speak(`Starting the ${requestedFacingMode === 'user' ? 'front' : 'rear'} camera. Ask me about anything in view.`);
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      
+
       streamRef.current = stream;
       if (videoRef.current) {
         // Set the video element to the new stream
@@ -382,7 +387,7 @@ const VisionPage = () => {
       } catch (resetError) {
         console.warn('Could not reset backend temporal state:', resetError);
       }
-      
+
       setIsStreaming(true);
       startPeriodicAnalysis(); // Starts the AI Loop immediately
     } catch (err) {
@@ -399,8 +404,8 @@ const VisionPage = () => {
       streamRef.current = null;
     }
     if (intervalRef.current) {
-        clearTimeout(intervalRef.current);
-        intervalRef.current = null;
+      clearTimeout(intervalRef.current);
+      intervalRef.current = null;
     }
     analysisLoopRef.current += 1;
     if (videoRef.current) videoRef.current.srcObject = null;
@@ -427,7 +432,7 @@ const VisionPage = () => {
 
     if (streamRef.current) {
       // 1. Stop the current stream silently
-      stopCamera(true); 
+      stopCamera(true);
       restartCameraWithMode(newFacingMode);
     } else {
       speak(`${newFacingMode === 'user' ? 'Front' : 'Rear'} camera selected.`);
@@ -436,46 +441,46 @@ const VisionPage = () => {
 
   // Helper to restart camera immediately after toggle
   const restartCameraWithMode = async (mode) => {
-      try {
-          setError(null);
-          ensureAudioContext(); // stopCamera() closed it; the toggle is a user gesture
-          const constraints = {
-              video: { 
-                  width: { ideal: 640 }, 
-                  height: { ideal: 480 },
-                  facingMode: mode 
-              },
-              audio: false
-          };
-          
-          speak(`Switching to ${mode === 'user' ? 'front' : 'rear'} camera.`);
-          
-          const stream = await navigator.mediaDevices.getUserMedia(constraints);
-          
-          streamRef.current = stream;
-          if (videoRef.current) {
-              videoRef.current.srcObject = stream;
-          }
+    try {
+      setError(null);
+      ensureAudioContext(); // stopCamera() closed it; the toggle is a user gesture
+      const constraints = {
+        video: {
+          width: { ideal: 640 },
+          height: { ideal: 480 },
+          facingMode: mode
+        },
+        audio: false
+      };
 
-          try {
-              await fetch(`${API_BASE_URL}/reset`, getFetchOptions({
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ session_id: voiceSessionIdRef.current }),
-              }));
-          } catch (resetError) {
-              console.warn('Could not reset backend temporal state:', resetError);
-          }
-          
-          setIsStreaming(true);
-          startPeriodicAnalysis();
-      } catch (err) {
-          console.error(err);
-          setError(`Could not access camera (${mode}).`);
-          toast.error("Camera switch failed. Device may not support this camera.");
-          speak("I cannot switch the camera.");
-          setIsStreaming(false);
+      speak(`Switching to ${mode === 'user' ? 'front' : 'rear'} camera.`);
+
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
       }
+
+      try {
+        await fetch(`${API_BASE_URL}/reset`, getFetchOptions({
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: voiceSessionIdRef.current }),
+        }));
+      } catch (resetError) {
+        console.warn('Could not reset backend temporal state:', resetError);
+      }
+
+      setIsStreaming(true);
+      startPeriodicAnalysis();
+    } catch (err) {
+      console.error(err);
+      setError(`Could not access camera (${mode}).`);
+      toast.error("Camera switch failed. Device may not support this camera.");
+      speak("I cannot switch the camera.");
+      setIsStreaming(false);
+    }
   }
 
 
@@ -483,9 +488,9 @@ const VisionPage = () => {
     if (!videoRef.current || !canvasRef.current) return null;
     const canvas = canvasRef.current;
     const ctx = canvas.getContext('2d');
-    canvas.width = 480; 
+    canvas.width = 480;
     canvas.height = 360;
-    
+
     // Apply horizontal flip for 'user' facing mode during capture to match user expectation (optional)
     if (facingModeRef.current === 'user') {
       ctx.translate(canvas.width, 0);
@@ -493,10 +498,10 @@ const VisionPage = () => {
     }
 
     ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
-    
+
     // Reset canvas transformation
     if (facingModeRef.current === 'user') {
-        ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
     }
 
     return new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.7));
@@ -529,7 +534,7 @@ const VisionPage = () => {
       }));
 
       if (!response.ok) throw new Error("Network error");
-      
+
       const data = await response.json();
       if (
         requestId !== analysisRequestRef.current
@@ -709,7 +714,7 @@ const VisionPage = () => {
     if (latestTTS.current) {
       new Audio(`data:audio/mp3;base64,${latestTTS.current}`).play();
     } else {
-      speak(currentDescription); 
+      speak(currentDescription);
     }
   };
 
@@ -769,7 +774,7 @@ const VisionPage = () => {
           <div className="video-controls">
             <div className="control-block">
               {!isStreaming ? (
-                <motion.button 
+                <motion.button
                   whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
                   onClick={startCamera}
                   className="control-button start-button"
@@ -788,22 +793,24 @@ const VisionPage = () => {
                 </motion.button>
               )}
             </div>
-            
+
             {/* New Switch Camera Button */}
             {hasMultipleCameras && (
-                <motion.button 
-                    whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
-                    onClick={toggleCamera}
-                    className="control-button switch-button"
-                    aria-label={`Switch to ${facingMode === 'user' ? 'rear' : 'front'} camera`}
-                    title={`Switch to ${facingMode === 'user' ? 'Rear' : 'Front'} Camera`}
-                >
-                    <RefreshCw size={20} /> 
-                    {facingMode === 'user' ? 'Switch to Rear' : 'Switch to Front'}
-                </motion.button>
+              <motion.button
+                whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
+                onClick={toggleCamera}
+                className="control-button switch-button"
+                aria-label={`Switch to ${facingMode === 'user' ? 'rear' : 'front'} camera`}
+                title={`Switch to ${facingMode === 'user' ? 'Rear' : 'Front'} Camera`}
+                // expose a real DOM node for programmatic .click() from voice handler
+                ref={(el) => { switchCameraButtonRef.current = el; }}
+              >
+                <RefreshCw size={20} />
+                {facingMode === 'user' ? 'Switch to Rear' : 'Switch to Front'}
+              </motion.button>
             )}
-            
-            <motion.button 
+
+            <motion.button
               whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
               onClick={() => setQaMode(!qaMode)}
               disabled={!isStreaming}
@@ -818,7 +825,7 @@ const VisionPage = () => {
           </div>
 
           <div className="control-buttons-row">
-            <motion.button 
+            <motion.button
               whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}
               onClick={() => setShowCalibration(!showCalibration)}
               className="secondary-button calibrate-button"
@@ -933,7 +940,7 @@ const VisionPage = () => {
               />
             </div>
           )}
-          
+
           {detections.length > 0 && (
             <div className="detections-card">
               <h4>Detected Objects ({detections.length})</h4>
@@ -950,12 +957,12 @@ const VisionPage = () => {
               </div>
             </div>
           )}
-          
+
           <div className="description-card">
             <h4>Scene Description</h4>
             <p className="description-text">{currentDescription}</p>
           </div>
-          
+
           {error && (
             <div className="error-card" role="alert">
               <AlertCircle size={20} />
