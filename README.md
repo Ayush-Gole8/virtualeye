@@ -126,6 +126,55 @@ https://xxxx.ngrok-free.app
 
 ---
 
+## Deployed Version (Vercel Frontend + Local Backend)
+
+The frontend is deployed at Vercel and accessible from any device. The backend still runs on your laptop and is exposed via Cloudflare Tunnel.
+
+### Prerequisites
+- Backend dependencies installed (`pip install -r requirements.txt`)
+- `cloudflared` installed on your laptop
+- Access to the Vercel project settings
+
+### Steps (every session)
+
+**1. Start the backend**
+```powershell
+cd backend
+.\venv\Scripts\activate
+python server.py
+```
+
+**2. Start Cloudflare Tunnel**
+```powershell
+& "C:\Program Files (x86)\cloudflared\cloudflared.exe" tunnel --url http://localhost:5000
+```
+Wait for the line:
+```
+Your quick Tunnel has been created! Visit it at:
+https://xxxx.trycloudflare.com
+```
+Copy that URL.
+
+**3. Update Vercel environment variable**
+- Go to your Vercel project → Settings → Environment Variables
+- Update `VITE_API_URL` value to `https://xxxx.trycloudflare.com`
+- Save
+
+**4. Redeploy on Vercel**
+- Go to Deployments tab
+- Click the 3 dots on the latest deployment → Redeploy
+
+**5. Open the Vercel URL on any device**
+- Camera, mic, and voice commands all work since Vercel provides HTTPS
+- No Chrome flags needed
+
+### Notes
+- The Cloudflare Tunnel URL changes every session — update Vercel each time
+- Keep both the backend terminal and cloudflared terminal running during use
+- For a permanent URL, set up a named Cloudflare Tunnel with a custom domain
+
+---
+
 ## System Requirements
 
 ### Minimum
